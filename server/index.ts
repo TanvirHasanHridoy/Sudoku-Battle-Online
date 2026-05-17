@@ -31,6 +31,7 @@ const httpServer = createServer(app);
 const clientDistPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
+  "..",
   "dist",
 );
 const io = new Server<

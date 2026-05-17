@@ -8,7 +8,7 @@ import { advanceRoomCountdown, createRoom, getRoom, getRoomForDevice, updateNote
 import { getDeviceStats } from "./statsStore.js";
 const app = express();
 const httpServer = createServer(app);
-const clientDistPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
+const clientDistPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "dist");
 const io = new Server(httpServer, {
     cors: {
         origin: true,
