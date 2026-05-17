@@ -1,0 +1,45 @@
+{
+  "name": "sudoku-remote",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev:server": "tsx watch server/index.ts",
+    "dev:client": "vite",
+    "dev": "concurrently -k -n server,client \"npm run dev:server\" \"npm run dev:client -- --host 0.0.0.0\"",
+    "start": "tsx server/index.ts",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "framer-motion": "^11.11.17",
+    "qrcode.react": "^3.1.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "socket.io": "^4.7.5",
+    "socket.io-client": "^4.7.5",
+    "tailwind-merge": "^2.5.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.7.5",
+    "@types/react": "^18.2.79",
+    "@types/react-dom": "^18.2.25",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.0.1",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.13",
+    "tsx": "^4.19.1",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.8"
+  }
+}
