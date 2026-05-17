@@ -14,7 +14,7 @@ import {
   type RoomState,
   type SubmitCellPayload,
   isRealDifficulty,
-} from "@shared/game";
+} from "../shared/game.js";
 import {
   getDeviceStats,
   recordCorrectPlacement,

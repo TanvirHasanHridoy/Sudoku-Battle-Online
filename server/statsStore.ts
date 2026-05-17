@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createEmptyStats, type DeviceStats } from "@shared/game";
+import { createEmptyStats, type DeviceStats } from "../shared/game.js";
 
 const statsFilePath = fileURLToPath(
   new URL("./data/stats.json", import.meta.url),

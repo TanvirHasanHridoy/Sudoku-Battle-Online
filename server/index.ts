@@ -10,7 +10,7 @@ import type {
   ServerToClientEvents,
   SocketData,
   VoiceSignalPayload,
-} from "@shared/game";
+} from "../shared/game.js";
 import {
   advanceRoomCountdown,
   createRoom,

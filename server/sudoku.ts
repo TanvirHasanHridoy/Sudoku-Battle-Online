@@ -2,7 +2,7 @@ import {
   DEFAULT_BLANKS_BY_DIFFICULTY,
   type Board,
   type RealDifficulty,
-} from "@shared/game";
+} from "../shared/game.js";
 
 const BASE_SOLUTION = Array.from({ length: 81 }, (_, index) => {
   const row = Math.floor(index / 9);
