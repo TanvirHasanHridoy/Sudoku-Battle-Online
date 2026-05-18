@@ -49,8 +49,8 @@
     "fastestSolveMs": 380877,
     "bestWinStreak": 1,
     "currentWinStreak": 0,
-    "lastSeenAt": 1779136317780,
-    "updatedAt": 1779136317780,
+    "lastSeenAt": 1779137468493,
+    "updatedAt": 1779137468493,
     "totalScore": 910
   },
   "device-dov58fe6": {
@@ -146,11 +146,11 @@
   "device-57l8wl8y": {
     "deviceId": "device-57l8wl8y",
     "displayName": "Hridoy",
-    "gamesPlayed": 0,
+    "gamesPlayed": 1,
     "roomsCreated": 1,
-    "roomsJoined": 1,
+    "roomsJoined": 2,
     "wins": 0,
-    "losses": 0,
+    "losses": 1,
     "mistakes": 0,
     "correctPlacements": 4,
     "wrongPlacements": 0,
@@ -158,8 +158,8 @@
     "fastestSolveMs": null,
     "bestWinStreak": 0,
     "currentWinStreak": 0,
-    "lastSeenAt": 1779136371417,
-    "updatedAt": 1779136371417
+    "lastSeenAt": 1779137468856,
+    "updatedAt": 1779137468856
   },
   "device-sre3ouyy": {
     "deviceId": "device-sre3ouyy",
