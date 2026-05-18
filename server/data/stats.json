@@ -13,8 +13,8 @@
     "fastestSolveMs": 668683,
     "bestWinStreak": 1,
     "currentWinStreak": 0,
-    "lastSeenAt": 1779028901279,
-    "updatedAt": 1779028901279,
+    "lastSeenAt": 1779139128374,
+    "updatedAt": 1779139128374,
     "totalScore": 75
   },
   "device-defam3rm": {
@@ -106,5 +106,23 @@
     "currentWinStreak": 0,
     "lastSeenAt": 1779026353914,
     "updatedAt": 1779026353914
+  },
+  "device-sre3ouyy": {
+    "deviceId": "device-sre3ouyy",
+    "displayName": "L",
+    "gamesPlayed": 0,
+    "roomsCreated": 0,
+    "roomsJoined": 0,
+    "wins": 0,
+    "losses": 0,
+    "mistakes": 0,
+    "correctPlacements": 0,
+    "wrongPlacements": 0,
+    "totalScore": 0,
+    "fastestSolveMs": null,
+    "bestWinStreak": 0,
+    "currentWinStreak": 0,
+    "lastSeenAt": 1779139128381,
+    "updatedAt": 1779139128381
   }
 }
