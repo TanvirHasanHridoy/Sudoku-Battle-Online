@@ -21,8 +21,8 @@
     "deviceId": "device-vifa0uwm",
     "displayName": "Hridoy",
     "gamesPlayed": 0,
-    "roomsCreated": 0,
-    "roomsJoined": 0,
+    "roomsCreated": 1,
+    "roomsJoined": 1,
     "wins": 0,
     "losses": 0,
     "mistakes": 0,
@@ -32,7 +32,7 @@
     "fastestSolveMs": null,
     "bestWinStreak": 0,
     "currentWinStreak": 0,
-    "lastSeenAt": 1779139223359,
-    "updatedAt": 1779139223359
+    "lastSeenAt": 1779139714318,
+    "updatedAt": 1779139714318
   }
 }
