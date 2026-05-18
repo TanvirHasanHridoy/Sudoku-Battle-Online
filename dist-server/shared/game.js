@@ -1,21 +1,27 @@
 export const DIFFICULTIES = [
     "random",
+    "beginner",
     "easy",
     "medium",
     "hard",
     "expert",
+    "master",
 ];
 export const DEFAULT_TIMER_BY_DIFFICULTY = {
+    beginner: 18 * 60,
     easy: 15 * 60,
     medium: 12 * 60,
     hard: 9 * 60,
     expert: 6 * 60,
+    master: 4 * 60,
 };
 export const DEFAULT_BLANKS_BY_DIFFICULTY = {
+    beginner: 30,
     easy: 38,
-    medium: 46,
-    hard: 53,
-    expert: 58,
+    medium: 44,
+    hard: 50,
+    expert: 56,
+    master: 61,
 };
 export const BATTLE_COUNTDOWN_SECONDS = 5;
 export function isRealDifficulty(value) {

@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Server } from "socket.io";
-import { advanceRoomCountdown, createRoom, getRoom, getRoomForDevice, updateNotes, joinRoom, markPlayerDisconnected, reconnectRoom, setPlayerReady, submitCell, sweepExpiredRooms, } from "./gameStore.js";
+import { advanceRoomCountdown, createRoom, getRoom, getRoomForDevice, updateNotes, joinRoom, markPlayerDisconnected, reconnectRoom, rematchRoom, spectateRoom, setPlayerReady, submitCell, sweepExpiredRooms, } from "./gameStore.js";
 import { getDeviceStats } from "./statsStore.js";
 const app = express();
 const httpServer = createServer(app);
@@ -148,6 +148,34 @@ io.on("connection", (socket) => {
             callback({ error: message });
         }
     });
+    socket.on("room:spectate", async (payload, callback) => {
+        try {
+            socket.data.deviceId = payload.deviceId;
+            socket.data.roomCode = payload.roomCode;
+            const room = await spectateRoom(payload.roomCode, payload.deviceId, payload.targetDeviceId);
+            callback({ room });
+            await emitRoomUpdate(payload.roomCode);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : "Unable to spectate room.";
+            socket.emit("room:error", message);
+            callback({ error: message });
+        }
+    });
+    socket.on("room:rematch", async (payload, callback) => {
+        try {
+            socket.data.deviceId = payload.deviceId;
+            socket.data.roomCode = payload.roomCode;
+            const room = await rematchRoom(payload.roomCode, payload.deviceId);
+            callback({ room });
+            await emitRoomUpdate(payload.roomCode);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : "Unable to start rematch.";
+            socket.emit("room:error", message);
+            callback({ error: message });
+        }
+    });
     socket.on("voice:signal", async (payload, callback) => {
         try {
             if (!payload.roomCode || payload.fromDeviceId !== socket.data.deviceId) {
@@ -164,6 +192,21 @@ io.on("connection", (socket) => {
             const message = error instanceof Error ? error.message : "Unable to send voice signal.";
             socket.emit("room:error", message);
             callback({ error: message });
+        }
+    });
+    socket.on("voice:audio", async (payload) => {
+        try {
+            if (!payload.roomCode || payload.fromDeviceId !== socket.data.deviceId) {
+                throw new Error("That voice message cannot be sent.");
+            }
+            const room = getRoomForDevice(payload.roomCode, payload.fromDeviceId);
+            if (!room || !room.players[payload.fromDeviceId]) {
+                throw new Error("That player is not in your room.");
+            }
+            socket.to(payload.roomCode).emit("voice:audio", payload);
+        }
+        catch {
+            // ignore transient voice relay failures
         }
     });
     socket.on("notes:update", async (payload, callback) => {

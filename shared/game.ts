@@ -1,9 +1,11 @@
 export const DIFFICULTIES = [
   "random",
+  "beginner",
   "easy",
   "medium",
   "hard",
   "expert",
+  "master",
 ] as const;
 
 export type Difficulty = (typeof DIFFICULTIES)[number];
@@ -21,8 +23,10 @@ export interface PlayerState {
   displayName: string;
   connected: boolean;
   ready: boolean;
+  rematchRequested: boolean;
   mistakes: number;
   outcome: PlayerOutcome;
+  spectatingDeviceId: string | null;
   joinedAt: number;
   lastMoveAt: number | null;
   score?: number;
@@ -46,7 +50,7 @@ export interface RoomState {
   players: Record<string, PlayerState>;
   // optional notes view tailored for the requesting device (populated by server)
   notes?: Record<number, number[]>;
-  // list of spectator display names (players who are not active)
+  // list of connected spectator display names
   spectators?: string[];
 }
 
@@ -107,6 +111,13 @@ export interface VoiceSignalPayload {
   candidate?: VoiceCandidatePayload;
 }
 
+export interface VoiceAudioPayload {
+  roomCode: string;
+  fromDeviceId: string;
+  chunk: ArrayBuffer;
+  mimeType: string;
+}
+
 export interface SubmitCellPayload {
   roomCode: string;
   deviceId: string;
@@ -157,6 +168,18 @@ export interface ClientToServerEvents {
     payload: ReadyRoomPayload,
     callback: (response: { room: RoomState } | { error: string }) => void,
   ) => void;
+  "room:spectate": (
+    payload: {
+      roomCode: string;
+      deviceId: string;
+      targetDeviceId: string | null;
+    },
+    callback: (response: { room: RoomState } | { error: string }) => void,
+  ) => void;
+  "room:rematch": (
+    payload: { roomCode: string; deviceId: string },
+    callback: (response: { room: RoomState } | { error: string }) => void,
+  ) => void;
   "notes:update": (
     payload: {
       roomCode: string;
@@ -169,6 +192,7 @@ export interface ClientToServerEvents {
     payload: VoiceSignalPayload,
     callback: (response: { ok: true } | { error: string }) => void,
   ) => void;
+  "voice:audio": (payload: VoiceAudioPayload) => void;
   "cell:submit": (
     payload: SubmitCellPayload,
     callback: (
@@ -190,6 +214,7 @@ export interface ServerToClientEvents {
   "room:ended": (room: RoomState) => void;
   "stats:updated": (stats: DeviceStats) => void;
   "voice:signal": (payload: VoiceSignalPayload) => void;
+  "voice:audio": (payload: VoiceAudioPayload) => void;
   "room:error": (message: string) => void;
 }
 
@@ -201,17 +226,21 @@ export interface SocketData {
 }
 
 export const DEFAULT_TIMER_BY_DIFFICULTY: Record<RealDifficulty, number> = {
+  beginner: 18 * 60,
   easy: 15 * 60,
   medium: 12 * 60,
   hard: 9 * 60,
   expert: 6 * 60,
+  master: 4 * 60,
 };
 
 export const DEFAULT_BLANKS_BY_DIFFICULTY: Record<RealDifficulty, number> = {
+  beginner: 30,
   easy: 38,
-  medium: 46,
-  hard: 53,
-  expert: 58,
+  medium: 44,
+  hard: 50,
+  expert: 56,
+  master: 61,
 };
 
 export const BATTLE_COUNTDOWN_SECONDS = 5;
