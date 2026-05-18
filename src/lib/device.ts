@@ -23,14 +23,19 @@ export function getDeviceId() {
 
 export function getDisplayName() {
   if (typeof window === "undefined") {
-    return "Player";
+    return "";
   }
 
-  return window.localStorage.getItem(DISPLAY_NAME_KEY) ?? "Player";
+  return window.localStorage.getItem(DISPLAY_NAME_KEY) ?? "";
 }
 
 export function setDisplayName(displayName: string) {
   if (typeof window === "undefined") {
+    return;
+  }
+
+  if (!displayName.trim()) {
+    window.localStorage.removeItem(DISPLAY_NAME_KEY);
     return;
   }
 

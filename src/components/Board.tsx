@@ -31,6 +31,7 @@ export function Board({
           const col = index % 9;
           const fixed = puzzle[index] !== null;
           const filled = value !== null;
+          const completed = !fixed && filled;
 
           const isSelected = selectedIndex === index;
           const sameNumberHighlight =
@@ -52,9 +53,11 @@ export function Board({
           let cellBg = "bg-[var(--board-cell-bg)]";
           let cellText = fixed
             ? "text-[var(--board-fixed-text)]"
-            : filled
-              ? "text-[var(--board-filled-text)]"
-              : "text-[var(--board-empty-text)]";
+            : completed
+              ? "bg-[var(--board-completed-bg)] text-[var(--board-completed-text)]"
+              : filled
+                ? "text-[var(--board-filled-text)]"
+                : "text-[var(--board-empty-text)]";
 
           if (isWrongMove) {
             cellBg = "bg-[var(--board-wrong-bg)]";
@@ -67,6 +70,9 @@ export function Board({
             cellText = "text-[var(--board-filled-text)]";
           } else if (sameRowOrCol) {
             cellBg = "bg-[var(--board-hover-bg)]";
+          } else if (completed) {
+            cellBg = "bg-[var(--board-completed-bg)]";
+            cellText = "text-[var(--board-completed-text)]";
           }
 
           const borderClasses: string[] = [];
@@ -102,10 +108,15 @@ export function Board({
               animate={cellAnimation}
               transition={cellTransition}
               whileTap={disabled ? undefined : { scale: 0.96 }}
-              onClick={() => {
-                if (!disabled) onSelect(index);
+              onPointerDown={(event) => {
+                if (disabled) {
+                  return;
+                }
+
+                event.preventDefault();
+                onSelect(index);
               }}
-              className={`relative aspect-square border border-[var(--board-cell-border)] text-[clamp(0.95rem,4vw,1.15rem)] font-semibold transition duration-150 sm:text-lg ${cellBg} ${cellText} ${borderClasses.join(" ")} ${disabled ? "cursor-not-allowed opacity-70" : isSelected ? "" : "hover:bg-[var(--board-hover-bg)]"}`}
+              className={`touch-manipulation relative aspect-square border border-[var(--board-cell-border)] text-[clamp(0.95rem,4vw,1.15rem)] font-semibold transition duration-150 sm:text-lg ${cellBg} ${cellText} ${borderClasses.join(" ")} ${disabled ? "cursor-not-allowed opacity-70" : isSelected ? "" : "hover:bg-[var(--board-hover-bg)]"}`}
               aria-label={`Cell ${row + 1}, ${col + 1}${fixed ? ", fixed" : ""}`}
             >
               <span className="absolute inset-0 flex items-center justify-center">

@@ -1,0 +1,38 @@
+{
+  "3f533e0b-b7bb-4c4b-83df-2ccc7b128e56": {
+    "deviceId": "3f533e0b-b7bb-4c4b-83df-2ccc7b128e56",
+    "displayName": "Player",
+    "gamesPlayed": 0,
+    "roomsCreated": 0,
+    "roomsJoined": 0,
+    "wins": 0,
+    "losses": 0,
+    "mistakes": 0,
+    "correctPlacements": 0,
+    "wrongPlacements": 0,
+    "totalScore": 0,
+    "fastestSolveMs": null,
+    "bestWinStreak": 0,
+    "currentWinStreak": 0,
+    "lastSeenAt": 1779031054692,
+    "updatedAt": 1779031054692
+  },
+  "73758449-8f11-4f7d-ac45-3626dd706d45": {
+    "deviceId": "73758449-8f11-4f7d-ac45-3626dd706d45",
+    "displayName": "Player",
+    "gamesPlayed": 1,
+    "roomsCreated": 2,
+    "roomsJoined": 2,
+    "wins": 0,
+    "losses": 1,
+    "mistakes": 3,
+    "correctPlacements": 0,
+    "wrongPlacements": 3,
+    "totalScore": -15,
+    "fastestSolveMs": null,
+    "bestWinStreak": 0,
+    "currentWinStreak": 0,
+    "lastSeenAt": 1779031093293,
+    "updatedAt": 1779031093293
+  }
+}

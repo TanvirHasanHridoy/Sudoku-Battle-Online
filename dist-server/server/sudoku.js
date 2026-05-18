@@ -25,12 +25,49 @@ function remapDigits(board) {
     const digits = shuffle([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     return board.map((value) => (value === null ? null : digits[value - 1]));
 }
+function pickBlankPositions(blankCount, difficulty) {
+    const shuffledPositions = shuffle(Array.from({ length: 81 }, (_, index) => index));
+    const selected = new Set();
+    const rowCounts = Array.from({ length: 9 }, () => 0);
+    const columnCounts = Array.from({ length: 9 }, () => 0);
+    const maxPerRow = difficulty === "beginner"
+        ? 4
+        : difficulty === "easy"
+            ? 5
+            : difficulty === "medium"
+                ? 6
+                : difficulty === "hard"
+                    ? 7
+                    : difficulty === "expert"
+                        ? 8
+                        : 9;
+    for (const position of shuffledPositions) {
+        if (selected.size >= blankCount) {
+            break;
+        }
+        const row = Math.floor(position / 9);
+        const column = position % 9;
+        if (rowCounts[row] >= maxPerRow || columnCounts[column] >= maxPerRow) {
+            continue;
+        }
+        selected.add(position);
+        rowCounts[row] += 1;
+        columnCounts[column] += 1;
+    }
+    for (const position of shuffledPositions) {
+        if (selected.size >= blankCount) {
+            break;
+        }
+        selected.add(position);
+    }
+    return Array.from(selected).slice(0, blankCount);
+}
 export function generateSudokuPuzzle(difficulty) {
     const permutation = buildPermutation();
     const randomizedSolution = remapDigits(permutation.map((index) => BASE_SOLUTION[index]));
     const puzzle = [...randomizedSolution];
     const blanksNeeded = DEFAULT_BLANKS_BY_DIFFICULTY[difficulty];
-    const positions = shuffle(Array.from({ length: 81 }, (_, index) => index)).slice(0, blanksNeeded);
+    const positions = pickBlankPositions(blanksNeeded, difficulty);
     for (const position of positions) {
         puzzle[position] = null;
     }

@@ -20,23 +20,28 @@ import {
   type Difficulty,
   type RoomMode,
   type RoomState,
+  type VoiceAudioPayload,
   type VoiceCandidatePayload,
   type VoiceSignalPayload,
 } from "@shared/game";
 
 const difficultyLabels: Record<Difficulty, string> = {
   random: "Random",
+  beginner: "Beginner",
   easy: "Easy",
   medium: "Medium",
   hard: "Hard",
   expert: "Expert",
+  master: "Master",
 };
 
 const difficultyDescriptions: Record<Exclude<Difficulty, "random">, string> = {
+  beginner: "Long timer and a gentle board for warm-up matches.",
   easy: "Calm pace and generous timer.",
   medium: "Balanced race for most groups.",
   hard: "Sharper clues with less time.",
   expert: "Fast round for serious players.",
+  master: "Very little room to breathe. Best for experts.",
 };
 
 type UndoAction =
@@ -49,6 +54,8 @@ type AckEventName =
   | "room:join"
   | "room:reconnect"
   | "room:ready"
+  | "room:spectate"
+  | "room:rematch"
   | "voice:signal"
   | "cell:submit";
 
@@ -172,6 +179,21 @@ function getDifficultyHint(difficulty: Difficulty) {
   return difficultyDescriptions[difficulty];
 }
 
+function getFirstActiveOpponentId(
+  room: RoomState | null,
+  selfDeviceId: string,
+) {
+  if (!room) {
+    return null;
+  }
+
+  const opponent = Object.values(room.players).find(
+    (player) => player.deviceId !== selfDeviceId && player.outcome === "active",
+  );
+
+  return opponent?.deviceId ?? null;
+}
+
 function getVoiceTargetIds(room: RoomState | null, selfDeviceId: string) {
   if (!room || room.mode !== "battle") {
     return [];
@@ -259,7 +281,9 @@ export default function App() {
     visible: boolean;
     outcome: "won" | "lost" | null;
     score: number;
-  }>({ visible: false, outcome: null, score: 0 });
+    spectateTargetId: string | null;
+  }>({ visible: false, outcome: null, score: 0, spectateTargetId: null });
+  const [rematchModal, setRematchModal] = useState({ visible: false });
   const prevRoomRef = useRef<RoomState | null>(null);
   const wrongMoveTimerRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -267,7 +291,15 @@ export default function App() {
   const undoHistoryRef = useRef<UndoAction[]>([]);
   const isReplayingUndoRef = useRef(false);
   const prevScoreRef = useRef<number | null>(null);
-  const lastFinishedRoomRef = useRef<string | null>(null);
+  const lastCompletedRoundRef = useRef<string | null>(null);
+  const timerWarningRef = useRef<{
+    roomKey: string;
+    half: boolean;
+    minute: boolean;
+    ten: boolean;
+  }>({ roomKey: "", half: false, minute: false, ten: false });
+  const lastCountdownKeyRef = useRef<string>("");
+  const lastCountdownTickRef = useRef<number | null>(null);
   const [createTimerOption, setCreateTimerOption] = useState<
     "default" | "none" | "custom"
   >("default");
@@ -279,6 +311,7 @@ export default function App() {
   const initialRoomAction = useRef<"join" | "reconnect" | null>(null);
   const autoJoinAttempted = useRef(false);
   const voiceLocalStreamRef = useRef<MediaStream | null>(null);
+  const voiceRecorderRef = useRef<MediaRecorder | null>(null);
   const voicePeersRef = useRef<Record<string, VoicePeerState>>({});
   const voiceTargetIdsRef = useRef<string[]>([]);
 
@@ -348,25 +381,147 @@ export default function App() {
   }, [themeMode, systemPrefersDark]);
 
   useEffect(() => {
+    if (!room) {
+      timerWarningRef.current = {
+        roomKey: "",
+        half: false,
+        minute: false,
+        ten: false,
+      };
+      lastCountdownKeyRef.current = "";
+      lastCountdownTickRef.current = null;
+      return;
+    }
+
+    const timerKey = `${room.roomCode}:${room.startedAt}:${room.expiresAt}`;
+    const countdownKey = `${room.roomCode}:${room.countdownEndsAt ?? ""}`;
+
+    if (timerWarningRef.current.roomKey !== timerKey) {
+      timerWarningRef.current = {
+        roomKey: timerKey,
+        half: false,
+        minute: false,
+        ten: false,
+      };
+    }
+
+    if (room.phase === "active" && room.timerSeconds !== null) {
+      const remaining = Math.max(0, Math.ceil((room.expiresAt - now) / 1000));
+      const halfMarker = Math.ceil(room.timerSeconds / 2);
+
+      if (remaining <= halfMarker && !timerWarningRef.current.half) {
+        timerWarningRef.current.half = true;
+        pushToast("Half the timer is gone.", "neutral", true);
+        playSound("tap");
+      }
+
+      if (remaining <= 60 && !timerWarningRef.current.minute) {
+        timerWarningRef.current.minute = true;
+        pushToast("One minute left.", "neutral", true);
+        playSound("tap");
+      }
+
+      if (remaining <= 10 && remaining > 0) {
+        if (!timerWarningRef.current.ten) {
+          timerWarningRef.current.ten = true;
+          pushToast("Last 10 seconds.", "danger", true, 1200);
+        }
+
+        if (lastCountdownTickRef.current !== remaining) {
+          lastCountdownTickRef.current = remaining;
+          playSound("countdown");
+        }
+      }
+    } else if (room.phase !== "active") {
+      timerWarningRef.current.half = false;
+      timerWarningRef.current.minute = false;
+      timerWarningRef.current.ten = false;
+    }
+
+    if (
+      room.phase === "lobby" &&
+      room.mode === "battle" &&
+      room.countdownEndsAt
+    ) {
+      const countdownRemaining = Math.max(
+        0,
+        Math.ceil((room.countdownEndsAt - now) / 1000),
+      );
+
+      if (lastCountdownKeyRef.current !== countdownKey) {
+        lastCountdownKeyRef.current = countdownKey;
+        lastCountdownTickRef.current = countdownRemaining;
+        if (countdownRemaining > 0) {
+          pushToast(
+            `Match starts in ${countdownRemaining}s.`,
+            "neutral",
+            true,
+            1600,
+          );
+        }
+        playSound("countdown");
+        return;
+      }
+
+      if (
+        lastCountdownTickRef.current !== null &&
+        countdownRemaining < lastCountdownTickRef.current &&
+        countdownRemaining > 0
+      ) {
+        lastCountdownTickRef.current = countdownRemaining;
+        playSound("countdown");
+      }
+    } else {
+      lastCountdownKeyRef.current = "";
+      lastCountdownTickRef.current = null;
+    }
+  }, [room, now]);
+
+  useEffect(() => {
     if (!room || room.phase !== "finished") {
       return;
     }
 
-    if (lastFinishedRoomRef.current === room.roomCode) {
+    const roundKey = `${room.roomCode}:${room.startedAt}`;
+    if (lastCompletedRoundRef.current === roundKey) {
       return;
     }
 
-    lastFinishedRoomRef.current = room.roomCode;
+    lastCompletedRoundRef.current = roundKey;
+
+    if (room.mode === "battle") {
+      setFinishModal({
+        visible: false,
+        outcome: null,
+        score: 0,
+        spectateTargetId: null,
+      });
+      setRematchModal({ visible: true });
+      pushToast(
+        "Battle round complete. Start a new game or leave the room.",
+        "neutral",
+        true,
+      );
+      if (
+        room.finishReason === "timeout" ||
+        room.finishReason === "all-eliminated"
+      ) {
+        playSound("loss");
+      } else {
+        playSound("win");
+      }
+      return;
+    }
 
     const outcome = room.players[deviceId]?.outcome;
     const score = room.players[deviceId]?.score ?? 0;
 
-    // Show modal for this player's outcome
     if (outcome === "won" || outcome === "lost") {
       setFinishModal({
         visible: true,
         outcome,
         score,
+        spectateTargetId: null,
       });
     }
 
@@ -380,6 +535,12 @@ export default function App() {
       pushToast("Round finished.", "neutral");
     }
   }, [deviceId, room]);
+
+  useEffect(() => {
+    if (room?.phase !== "finished") {
+      setRematchModal({ visible: false });
+    }
+  }, [room?.phase]);
 
   useEffect(() => {
     // play sounds when the player's score changes (per-move or on win)
@@ -459,41 +620,73 @@ export default function App() {
 
       const previousRoom = prevRoomRef.current;
 
-      // detect outcome change for local player
-      const prevOutcome = previousRoom?.players?.[deviceId]?.outcome ?? null;
-      const nextOutcome = nextRoom.players?.[deviceId]?.outcome ?? null;
-
-      if (prevOutcome === "active" && nextOutcome && nextOutcome !== "active") {
-        setFinishModal({
-          visible: true,
-          outcome: nextOutcome,
-          score: nextRoom.players[deviceId]?.score ?? 0,
-        });
-      }
-
       // notify when other players finish (toast)
       if (previousRoom) {
         for (const [id, player] of Object.entries(nextRoom.players)) {
           const prevPlayer = previousRoom.players[id];
           if (!prevPlayer) continue;
           if (
+            id !== deviceId &&
             prevPlayer.outcome === "active" &&
-            player.outcome !== "active" &&
-            id !== deviceId
+            player.outcome !== "active"
           ) {
             const message =
               player.outcome === "won"
-                ? `${player.displayName} solved the board!`
-                : `${player.displayName} was eliminated.`;
+                ? `${player.displayName} solved the board first.`
+                : `${player.displayName} got eliminated.`;
             pushToast(message, player.outcome === "won" ? "success" : "danger");
+          }
+
+          if (
+            prevPlayer.spectatingDeviceId !== player.spectatingDeviceId &&
+            player.spectatingDeviceId === deviceId &&
+            id !== deviceId
+          ) {
+            pushToast(
+              `${player.displayName} entered to spectate you.`,
+              "neutral",
+              true,
+            );
+          }
+
+          if (
+            id !== deviceId &&
+            prevPlayer.spectatingDeviceId === deviceId &&
+            player.spectatingDeviceId !== deviceId
+          ) {
+            pushToast(
+              `${player.displayName} stopped spectating you.`,
+              "neutral",
+              true,
+            );
+          }
+
+          if (
+            id === deviceId &&
+            prevPlayer.spectatingDeviceId !== player.spectatingDeviceId &&
+            player.spectatingDeviceId !== null
+          ) {
+            const targetName =
+              nextRoom.players[player.spectatingDeviceId]?.displayName;
+            if (targetName) {
+              pushToast(
+                `You are now spectating ${targetName}.`,
+                "neutral",
+                true,
+              );
+            }
           }
         }
 
         // notify when players leave
         for (const [id, prevPlayer] of Object.entries(previousRoom.players)) {
           const nextPlayer = nextRoom.players[id];
-          if (!nextPlayer && id !== deviceId) {
-            pushToast(`${prevPlayer.displayName} left the game.`, "neutral");
+          if (
+            id !== deviceId &&
+            prevPlayer.connected &&
+            !nextPlayer?.connected
+          ) {
+            pushToast(`${prevPlayer.displayName} exited the room.`, "neutral");
           }
         }
       }
@@ -522,6 +715,10 @@ export default function App() {
       void handleVoiceSignal(payload);
     };
 
+    const handleVoiceAudioEvent = (payload: VoiceAudioPayload) => {
+      handleVoiceAudio(payload);
+    };
+
     const handleConnect = () => {
       setSocketReady(true);
     };
@@ -531,6 +728,7 @@ export default function App() {
     socket.on("stats:updated", handleStatsUpdated);
     socket.on("room:error", handleRoomError);
     socket.on("voice:signal", handleVoiceSignalEvent);
+    socket.on("voice:audio", handleVoiceAudioEvent);
     socket.on("connect", handleConnect);
     socket.connect();
 
@@ -540,13 +738,20 @@ export default function App() {
       socket.off("stats:updated", handleStatsUpdated);
       socket.off("room:error", handleRoomError);
       socket.off("voice:signal", handleVoiceSignalEvent);
+      socket.off("voice:audio", handleVoiceAudioEvent);
       socket.off("connect", handleConnect);
       socket.disconnect();
     };
   }, [deviceId, displayNameDraft]);
 
   useEffect(() => {
-    if (!socketReady || room || autoJoinAttempted.current || !roomCodeDraft) {
+    if (
+      !socketReady ||
+      room ||
+      autoJoinAttempted.current ||
+      !roomCodeDraft ||
+      !displayNameDraft.trim()
+    ) {
       return;
     }
 
@@ -558,7 +763,7 @@ export default function App() {
     }
 
     void joinExistingRoom(roomCodeDraft);
-  }, [room, roomCodeDraft, socketReady]);
+  }, [room, roomCodeDraft, socketReady, displayNameDraft]);
 
   useEffect(() => {
     if (!room) {
@@ -743,7 +948,15 @@ export default function App() {
   }
 
   function playSound(
-    kind: "tap" | "correct" | "wrong" | "win" | "loss" | "clear" | "undo",
+    kind:
+      | "tap"
+      | "correct"
+      | "wrong"
+      | "win"
+      | "loss"
+      | "clear"
+      | "undo"
+      | "countdown",
   ) {
     if (typeof window === "undefined") {
       return;
@@ -808,6 +1021,10 @@ export default function App() {
       case "clear":
         scheduleTone(440, startAt, 0.07, 0.05);
         break;
+      case "countdown":
+        scheduleTone(880, startAt, 0.06, 0.06, "square");
+        scheduleTone(1320, startAt + 0.04, 0.04, 0.04, "square");
+        break;
       case "undo":
         scheduleTone(554.37, startAt, 0.08, 0.05);
         break;
@@ -834,7 +1051,7 @@ export default function App() {
   function handleDisplayNameChange(value: string) {
     const trimmed = value.slice(0, 24);
     setDisplayNameDraft(trimmed);
-    setDisplayName(trimmed || "Player");
+    setDisplayName(trimmed);
   }
 
   function handleRoomCodeChange(value: string) {
@@ -865,6 +1082,16 @@ export default function App() {
 
   async function emitVoiceSignal(payload: VoiceSignalPayload) {
     return emitWithAck<{ ok: true }>("voice:signal", payload);
+  }
+
+  async function emitVoiceAudio(payload: VoiceAudioPayload) {
+    const socket = socketRef.current;
+
+    if (!socket) {
+      return;
+    }
+
+    socket.emit("voice:audio", payload);
   }
 
   function getVoicePeer(targetDeviceId: string) {
@@ -995,6 +1222,17 @@ export default function App() {
       await cleanupVoicePeer(targetDeviceId);
     }
 
+    const recorder = voiceRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      try {
+        recorder.stop();
+      } catch {
+        // ignore stop failures
+      }
+    }
+
+    voiceRecorderRef.current = null;
+
     voiceTargetIdsRef.current = [];
 
     const localStream = voiceLocalStreamRef.current;
@@ -1013,7 +1251,7 @@ export default function App() {
 
     if (
       !navigator.mediaDevices?.getUserMedia ||
-      typeof RTCPeerConnection === "undefined"
+      typeof MediaRecorder === "undefined"
     ) {
       setVoiceError("Voice chat is not supported in this browser.");
       setVoiceStatus("error");
@@ -1033,11 +1271,33 @@ export default function App() {
         );
       }
 
-      const targetIds = getVoiceTargetIds(room, deviceId);
-      for (const targetDeviceId of targetIds) {
-        await attachLocalAudio(targetDeviceId);
-        await createVoiceOffer(targetDeviceId);
-      }
+      const mimeType =
+        ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(
+          (candidate) => MediaRecorder.isTypeSupported(candidate),
+        ) ?? "";
+
+      const recorder = new MediaRecorder(
+        voiceLocalStreamRef.current,
+        mimeType ? { mimeType } : undefined,
+      );
+
+      recorder.ondataavailable = (event) => {
+        if (!room || !event.data.size) {
+          return;
+        }
+
+        void event.data.arrayBuffer().then((chunk) => {
+          void emitVoiceAudio({
+            roomCode: room.roomCode,
+            fromDeviceId: deviceId,
+            chunk,
+            mimeType: event.data.type || mimeType || "audio/webm",
+          });
+        });
+      };
+
+      recorder.start(250);
+      voiceRecorderRef.current = recorder;
 
       setVoiceStatus("active");
     } catch (error) {
@@ -1125,20 +1385,47 @@ export default function App() {
     }
   }
 
+  function handleVoiceAudio(payload: VoiceAudioPayload) {
+    if (!room || payload.roomCode !== room.roomCode) {
+      return;
+    }
+
+    if (payload.fromDeviceId === deviceId) {
+      return;
+    }
+
+    const blob = new Blob([payload.chunk], {
+      type: payload.mimeType || "audio/webm",
+    });
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+
+    audio.onended = () => URL.revokeObjectURL(url);
+    audio.play().catch(() => {
+      URL.revokeObjectURL(url);
+    });
+  }
+
   async function createRoom() {
     if (isBusy) {
       return;
     }
 
+    const displayName = displayNameDraft.trim();
+    if (!displayName) {
+      setStatusMessage("Enter your name first.");
+      return;
+    }
+
     setIsBusy(true);
     setStatusMessage("Creating room...");
-    setDisplayName(displayNameDraft || "Player");
+    setDisplayName(displayName);
     setActiveRoomCode("");
 
     try {
       const payload: any = {
         deviceId,
-        displayName: displayNameDraft || "Player",
+        displayName,
         difficulty,
         mode: roomMode,
       };
@@ -1183,6 +1470,12 @@ export default function App() {
       return;
     }
 
+    const displayName = displayNameDraft.trim();
+    if (!displayName) {
+      setStatusMessage("Enter your name first.");
+      return;
+    }
+
     const normalizedCode = normalizeRoomCode(roomCode);
     if (!normalizedCode) {
       setStatusMessage("Enter a room code first.");
@@ -1191,7 +1484,7 @@ export default function App() {
 
     setIsBusy(true);
     setStatusMessage(`Joining room ${normalizedCode}...`);
-    setDisplayName(displayNameDraft || "Player");
+    setDisplayName(displayName);
 
     try {
       const result = await emitWithAck<{ room: RoomState; stats: DeviceStats }>(
@@ -1199,7 +1492,7 @@ export default function App() {
         {
           roomCode: normalizedCode,
           deviceId,
-          displayName: displayNameDraft || "Player",
+          displayName,
         },
       );
 
@@ -1232,6 +1525,12 @@ export default function App() {
       return;
     }
 
+    const displayName = displayNameDraft.trim();
+    if (!displayName) {
+      setStatusMessage("Enter your name first.");
+      return;
+    }
+
     const normalizedCode = normalizeRoomCode(roomCode);
     if (!normalizedCode) {
       return;
@@ -1246,7 +1545,7 @@ export default function App() {
         {
           roomCode: normalizedCode,
           deviceId,
-          displayName: displayNameDraft || "Player",
+          displayName,
         },
       );
 
@@ -1276,7 +1575,7 @@ export default function App() {
     const canInteract =
       room?.phase === "active" && currentPlayer?.outcome === "active";
 
-    if (!room || !canInteract || targetIndex === null || isBusy) {
+    if (!room || !canInteract || targetIndex === null) {
       return;
     }
 
@@ -1340,7 +1639,6 @@ export default function App() {
     const row = Math.floor(targetIndex / 9);
     const col = targetIndex % 9;
     const previousBoardValue = room.board[targetIndex];
-    setIsBusy(true);
 
     const clearWrongMoveTimer = () => {
       if (wrongMoveTimerRef.current !== null) {
@@ -1438,6 +1736,8 @@ export default function App() {
       setRoom(result.room);
       setStats(result.stats);
 
+      const nextOutcome = result.room.players[deviceId]?.outcome ?? null;
+
       if (value !== null && result.moveOutcome?.type === "correct") {
         playSound("correct");
       } else if (value === null) {
@@ -1465,15 +1765,40 @@ export default function App() {
         });
       }
 
-      if (result.room.phase === "finished") {
-        setStatusMessage(
-          result.room.finishReason === "solved"
-            ? `Solved by ${result.room.players[result.room.winnerDeviceId ?? ""]?.displayName ?? "a player"}.`
-            : result.room.finishReason === "timeout"
-              ? "The timer expired."
-              : "Everybody lost their three chances.",
+      if (
+        result.room.phase === "active" &&
+        nextOutcome &&
+        nextOutcome !== "active"
+      ) {
+        const spectateTargetId = getFirstActiveOpponentId(
+          result.room,
+          deviceId,
         );
-        clearActiveRoomCode();
+        setFinishModal({
+          visible: true,
+          outcome: nextOutcome,
+          score: result.room.players[deviceId]?.score ?? 0,
+          spectateTargetId,
+        });
+        setStatusMessage(
+          nextOutcome === "won"
+            ? "You solved the board. You can spectate or exit."
+            : "You are out of chances. You can spectate or exit.",
+        );
+        if (nextOutcome === "won") {
+          playSound("win");
+        } else {
+          playSound("loss");
+        }
+      } else if (result.room.phase === "finished") {
+        setRematchModal({ visible: true });
+        setFinishModal({
+          visible: false,
+          outcome: null,
+          score: 0,
+          spectateTargetId: null,
+        });
+        setStatusMessage("Round complete. Start a new game or leave the room.");
       } else if (value === null) {
         setStatusMessage("Cell cleared.");
       } else if (result.moveOutcome?.type === "wrong") {
@@ -1487,8 +1812,6 @@ export default function App() {
       setStatusMessage(
         error instanceof Error ? error.message : "Unable to update the board.",
       );
-    } finally {
-      setIsBusy(false);
     }
   }
 
@@ -1565,6 +1888,13 @@ export default function App() {
     setRoom(null);
     setSelectedIndex(null);
     setWrongMove(null);
+    setFinishModal({
+      visible: false,
+      outcome: null,
+      score: 0,
+      spectateTargetId: null,
+    });
+    setRematchModal({ visible: false });
     setGameMenuOpen(false);
     if (wrongMoveTimerRef.current !== null) {
       window.clearTimeout(wrongMoveTimerRef.current);
@@ -1575,6 +1905,91 @@ export default function App() {
       "Left the room. You can create a new one or join another game.",
     );
     await syncStats();
+  }
+
+  async function spectateOpponent() {
+    if (!room) {
+      return;
+    }
+
+    const targetDeviceId =
+      finishModal.spectateTargetId ?? getFirstActiveOpponentId(room, deviceId);
+
+    if (!targetDeviceId) {
+      setFinishModal({
+        visible: false,
+        outcome: null,
+        score: 0,
+        spectateTargetId: null,
+      });
+      return;
+    }
+
+    try {
+      const result = await emitWithAck<{ room: RoomState }>("room:spectate", {
+        roomCode: room.roomCode,
+        deviceId,
+        targetDeviceId,
+      });
+
+      setRoom(result.room);
+      prevRoomRef.current = result.room;
+      setSelectedIndex(firstEditableCell(result.room));
+      setFinishModal({
+        visible: false,
+        outcome: null,
+        score: 0,
+        spectateTargetId: null,
+      });
+
+      const targetName = result.room.players[targetDeviceId]?.displayName;
+      if (targetName) {
+        setStatusMessage(`Now spectating ${targetName}.`);
+      }
+    } catch (error) {
+      setStatusMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to spectate the board.",
+      );
+    }
+  }
+
+  async function requestRematch() {
+    if (!room) {
+      return;
+    }
+
+    try {
+      const result = await emitWithAck<{ room: RoomState }>("room:rematch", {
+        roomCode: room.roomCode,
+        deviceId,
+      });
+
+      setRoom(result.room);
+      prevRoomRef.current = result.room;
+      setSelectedIndex(firstEditableCell(result.room));
+      setFinishModal({
+        visible: false,
+        outcome: null,
+        score: 0,
+        spectateTargetId: null,
+      });
+      if (result.room.phase === "lobby") {
+        setRematchModal({ visible: false });
+        setStatusMessage(
+          `New round queued in room ${result.room.roomCode}. Ready up when you're set.`,
+        );
+        playSound("tap");
+      } else {
+        setRematchModal({ visible: true });
+        setStatusMessage("Restart requested. Waiting for the other players.");
+      }
+    } catch (error) {
+      setStatusMessage(
+        error instanceof Error ? error.message : "Unable to start a rematch.",
+      );
+    }
   }
 
   async function copyRoomLink() {
@@ -1643,8 +2058,29 @@ export default function App() {
   const NO_TIMER_THRESHOLD = Date.now() + 1000 * 60 * 60 * 24 * 365 * 5; // 5 years
   const isNoTimer = room ? room.expiresAt > NO_TIMER_THRESHOLD : false;
   const currentPlayer = room ? room.players[deviceId] : null;
+  const spectatedPlayer =
+    room && currentPlayer?.spectatingDeviceId
+      ? (room.players[currentPlayer.spectatingDeviceId] ?? null)
+      : null;
+  const watchersWatchingMe =
+    room && currentPlayer?.outcome === "active"
+      ? Object.values(room.players).filter(
+          (player) =>
+            player.deviceId !== deviceId &&
+            player.spectatingDeviceId === deviceId,
+        )
+      : [];
+  const opponent = room
+    ? (Object.values(room.players).find(
+        (p) => p.deviceId !== deviceId && p.outcome === "active",
+      ) ?? null)
+    : null;
   const canInteract =
     room?.phase === "active" && currentPlayer?.outcome === "active";
+  const canRequestRematch =
+    room?.mode === "battle" &&
+    !!currentPlayer &&
+    currentPlayer.outcome !== "active";
   const isBattleLobby = room?.mode === "battle" && room.phase === "lobby";
   const countdownRemaining =
     isBattleLobby && room.countdownEndsAt
@@ -1693,11 +2129,13 @@ export default function App() {
           : "Preparing the board"
       : canInteract
         ? "Your turn"
-        : currentPlayer?.outcome === "won"
-          ? "You won. Watching the room now."
-          : currentPlayer?.outcome === "lost"
-            ? "You are out. Watching the room now."
-            : "Board locked"
+        : currentPlayer?.spectatingDeviceId
+          ? `Spectating ${spectatedPlayer?.displayName ?? "another board"}.`
+          : currentPlayer?.outcome === "won"
+            ? "You won. You can spectate or exit."
+            : currentPlayer?.outcome === "lost"
+              ? "You are out. You can spectate or exit."
+              : "Board locked"
     : "No room loaded";
 
   return (
@@ -1710,35 +2148,83 @@ export default function App() {
           <div
             className="absolute inset-0 bg-black/50"
             onClick={() =>
-              setFinishModal({ visible: false, outcome: null, score: 0 })
+              setFinishModal({
+                visible: false,
+                outcome: null,
+                score: 0,
+                spectateTargetId: null,
+              })
             }
           />
           <div className="relative z-10 w-[min(32rem,90vw)] rounded-2xl bg-slate-900/95 p-6 shadow-2xl">
             <h3 className="text-xl font-semibold text-white">
               {finishModal.outcome === "won"
-                ? "You finished!"
-                : "You were eliminated"}
+                ? "You solved the board"
+                : "You ran out of mistakes"}
             </h3>
             <p className="mt-3 text-sm text-slate-300">
               Score: {finishModal.score}
             </p>
             <div className="mt-6 flex gap-3">
               <button
+                onClick={() => void spectateOpponent()}
+                disabled={
+                  !finishModal.spectateTargetId &&
+                  !getFirstActiveOpponentId(room, deviceId)
+                }
+                className="rounded-2xl bg-sky-500/15 px-4 py-2 text-sky-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Spectate board
+              </button>
+              <button
                 onClick={() => {
-                  setFinishModal({ visible: false, outcome: null, score: 0 });
+                  setFinishModal({
+                    visible: false,
+                    outcome: null,
+                    score: 0,
+                    spectateTargetId: null,
+                  });
                   void leaveRoom();
                 }}
                 className="ml-auto rounded-2xl bg-rose-600/10 px-4 py-2 text-rose-200"
               >
                 Exit room
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {rematchModal.visible ? (
+        <div className="fixed inset-0 z-[9998] flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setRematchModal({ visible: false })}
+          />
+          <div className="relative z-10 w-[min(32rem,90vw)] rounded-2xl bg-slate-900/95 p-6 shadow-2xl">
+            <h3 className="text-xl font-semibold text-white">Match complete</h3>
+            <p className="mt-3 text-sm text-slate-300">
+              Everyone in the room is done. Start a new round with the same room
+              settings.
+            </p>
+            <div className="mt-6 flex gap-3">
+              <button
+                onClick={() => void requestRematch()}
+                disabled={currentPlayer?.rematchRequested}
+                className="rounded-2xl bg-emerald-500/15 px-4 py-2 text-emerald-100"
+              >
+                {currentPlayer?.rematchRequested
+                  ? "Waiting for others..."
+                  : "Request restart"}
+              </button>
               <button
                 onClick={() => {
-                  setFinishModal({ visible: false, outcome: null, score: 0 });
+                  setRematchModal({ visible: false });
+                  void leaveRoom();
                 }}
-                className="rounded-2xl bg-white/5 px-4 py-2 text-white"
+                className="ml-auto rounded-2xl bg-rose-600/10 px-4 py-2 text-rose-200"
               >
-                Spectate opponent
+                Exit room
               </button>
             </div>
           </div>
@@ -1808,39 +2294,10 @@ export default function App() {
             </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-4 lg:min-w-[40rem]">
-            <div className="rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-3">
-              <p className="text-[0.7rem] uppercase tracking-[0.35em] text-slate-400">
-                Session
-              </p>
-              <p className="mt-2 text-lg font-semibold text-white">
-                {room?.roomCode ?? "Lobby"}
-              </p>
-            </div>
-            <div className="rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-3">
-              <p className="text-[0.7rem] uppercase tracking-[0.35em] text-slate-400">
-                Timer
-              </p>
-              <p className="mt-2 text-lg font-semibold text-white">
-                {room ? formatTime(roomTimer) : "--:--"}
-              </p>
-            </div>
-            <div className="rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-3">
-              <p className="text-[0.7rem] uppercase tracking-[0.35em] text-slate-400">
-                Score
-              </p>
-              <p className="mt-2 text-lg font-semibold text-white">
-                {room ? currentScore : 0}
-              </p>
-            </div>
-            <div className="rounded-2xl border border-white/10 bg-slate-950/50 px-4 py-3">
-              <p className="text-[0.7rem] uppercase tracking-[0.35em] text-slate-400">
-                Mistakes left
-              </p>
-              <p className="mt-2 text-lg font-semibold text-white">
-                {mistakesLeft} / 3
-              </p>
-            </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-[0.28em] text-slate-300">
+            <span className="rounded-full border border-white/10 bg-slate-950/50 px-3 py-1.5">
+              {room?.roomCode ?? "Lobby"}
+            </span>
           </div>
         </header>
 
@@ -1879,8 +2336,11 @@ export default function App() {
                         }
                         maxLength={24}
                         className="w-full rounded-2xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none transition placeholder:text-slate-500 focus:border-sky-400/40 focus:ring-2 focus:ring-sky-400/20"
-                        placeholder="Player"
+                        placeholder="Enter your name"
                       />
+                      <p className="mt-2 text-xs text-slate-400">
+                        A name is required before you can create or join a room.
+                      </p>
                     </label>
 
                     <label className="block">
@@ -2082,6 +2542,18 @@ export default function App() {
                             : "Talk"}
                       </button>
                     ) : null}
+                    {canRequestRematch ? (
+                      <button
+                        type="button"
+                        onClick={() => void requestRematch()}
+                        disabled={currentPlayer?.rematchRequested}
+                        className="inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-4 py-2 transition hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {currentPlayer?.rematchRequested
+                          ? "Restart requested"
+                          : "Request restart"}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => setGameMenuOpen((current) => !current)}
@@ -2130,7 +2602,9 @@ export default function App() {
                           <p className="text-[0.65rem] uppercase tracking-[0.3em] text-slate-500 truncate max-w-[8rem]">
                             {player.displayName}
                           </p>
-                          <p className="text-base font-semibold text-white">{player.score}</p>
+                          <p className="text-base font-semibold text-white">
+                            {player.score}
+                          </p>
                         </div>
                       ))}
                     </div>
@@ -2150,19 +2624,69 @@ export default function App() {
                     </button>
                   ) : null}
 
-                  <Board
-                    board={room.board}
-                    puzzle={room.puzzle}
-                    selectedIndex={selectedIndex}
-                    disabled={!canInteract}
-                    notes={room?.notes ?? notes}
-                    wrongMove={wrongMove}
-                    onSelect={(index) => {
-                      if (canInteract) {
-                        setSelectedIndex(index);
-                      }
-                    }}
-                  />
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <span className="inline-flex h-10 min-w-[8.5rem] items-center justify-center rounded-full border border-white/10 bg-white/5 px-3 text-xs uppercase tracking-[0.28em] text-slate-200 tabular-nums whitespace-nowrap">
+                      Timer{" "}
+                      <span className="ml-1 font-mono">
+                        {formatTime(roomTimer)}
+                      </span>
+                    </span>
+                    <span className="inline-flex h-10 min-w-[8.5rem] items-center justify-center rounded-full border border-sky-400/30 bg-sky-400/10 px-3 text-xs uppercase tracking-[0.28em] text-sky-100 tabular-nums whitespace-nowrap">
+                      You <span className="ml-1 font-mono">{currentScore}</span>{" "}
+                      pts /{" "}
+                      <span className="ml-1 font-mono">{mistakesLeft}</span>{" "}
+                      lives
+                    </span>
+                    {opponent ? (
+                      <span className="inline-flex h-10 min-w-[10.5rem] max-w-full items-center justify-center rounded-full border border-white/10 bg-slate-950/50 px-3 text-xs uppercase tracking-[0.28em] text-slate-200 tabular-nums whitespace-nowrap overflow-hidden">
+                        <span className="truncate">{opponent.displayName}</span>
+                        <span className="ml-1 font-mono">
+                          {opponent.score ?? 0}
+                        </span>{" "}
+                        pts /{" "}
+                        <span className="ml-1 font-mono">
+                          {Math.max(0, 3 - (opponent.mistakes ?? 0))}
+                        </span>{" "}
+                        lives
+                      </span>
+                    ) : null}
+                    {watchersWatchingMe.length > 0 ? (
+                      <span className="inline-flex h-10 min-w-[9rem] max-w-full items-center justify-center gap-1 rounded-full border border-cyan-300/30 bg-cyan-300/10 px-3 text-xs uppercase tracking-[0.28em] text-cyan-50 whitespace-nowrap overflow-hidden">
+                        <EyeIcon />
+                        <span className="truncate">
+                          {watchersWatchingMe.length === 1
+                            ? `${watchersWatchingMe[0]?.displayName} spectating`
+                            : `${watchersWatchingMe.length} spectators`}
+                        </span>
+                      </span>
+                    ) : null}
+                    {currentPlayer?.spectatingDeviceId && spectatedPlayer ? (
+                      <span className="inline-flex h-10 min-w-[9rem] max-w-full items-center justify-center gap-1 rounded-full border border-cyan-300/30 bg-cyan-300/10 px-3 text-xs uppercase tracking-[0.28em] text-cyan-50 whitespace-nowrap overflow-hidden">
+                        <EyeIcon />
+                        <span className="truncate">
+                          Watching {spectatedPlayer.displayName}
+                        </span>
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div
+                    className={`rounded-[1.75rem] border p-2 transition ${currentPlayer?.spectatingDeviceId ? "border-cyan-300/50 bg-cyan-400/10 shadow-[0_0_0_1px_rgba(34,211,238,0.18)]" : "border-white/10 bg-white/5"}`}
+                  >
+                    <Board
+                      board={room.board}
+                      puzzle={room.puzzle}
+                      selectedIndex={selectedIndex}
+                      disabled={!canInteract}
+                      notes={room?.notes ?? notes}
+                      wrongMove={wrongMove}
+                      onSelect={(index) => {
+                        if (canInteract) {
+                          setSelectedIndex(index);
+                        }
+                      }}
+                    />
+                  </div>
 
                   {/* Control buttons and number pad */}
                   <div className="sticky bottom-2 z-30 space-y-3 rounded-[1.75rem] border border-white/10 bg-slate-950/90 p-3 shadow-2xl shadow-slate-950/40 backdrop-blur-xl sm:static sm:bottom-auto sm:z-auto sm:bg-slate-950/40 sm:shadow-none">
@@ -2199,7 +2723,9 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => void undoLastAction()}
-                        disabled={!canInteract || undoHistoryRef.current.length === 0}
+                        disabled={
+                          !canInteract || undoHistoryRef.current.length === 0
+                        }
                         className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 sm:text-sm"
                         title="Undo"
                       >
@@ -2221,16 +2747,6 @@ export default function App() {
                           {value}
                         </button>
                       ))}
-                      <button
-                        type="button"
-                        onClick={() => void submitValue(null)}
-                        disabled={!canInteract}
-                        className="flex h-11 items-center justify-center rounded-2xl border border-white/10 bg-slate-950/40 text-slate-300 transition hover:-translate-y-0.5 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 sm:h-12"
-                        aria-label="Erase (quick)"
-                        title="Erase"
-                      >
-                        <EraserIcon />
-                      </button>
                     </div>
 
                     {/* Status bar */}
@@ -2319,9 +2835,11 @@ export default function App() {
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div>
-                              <p className="font-semibold text-white">
-                                {player.displayName}
-                              </p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="font-semibold text-white">
+                                  {player.displayName}
+                                </p>
+                              </div>
                               <p className="text-xs uppercase tracking-[0.3em] text-slate-400">
                                 {player.deviceId === deviceId
                                   ? "This device"
@@ -2347,23 +2865,6 @@ export default function App() {
                       ))}
                     </div>
                   </div>
-                  {room.spectators && room.spectators.length > 0 ? (
-                    <div className="rounded-[1.5rem] border border-white/10 bg-slate-950/40 p-4 mt-3">
-                      <p className="text-xs uppercase tracking-[0.35em] text-slate-400">
-                        Spectators
-                      </p>
-                      <div className="mt-3 space-y-2 text-sm text-slate-200">
-                        {room.spectators.map((name) => (
-                          <div
-                            key={name}
-                            className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2"
-                          >
-                            {name}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
                 </aside>
 
                 {Object.entries(voiceStreams).map(
@@ -2645,13 +3146,25 @@ function VoiceAudio({ stream }: { stream: MediaStream | null }) {
     }
 
     audioRef.current.srcObject = stream;
+    if (stream) {
+      void audioRef.current.play().catch(() => {
+        // autoplay can still be blocked until the browser allows it
+      });
+    }
   }, [stream]);
 
   if (!stream) {
     return null;
   }
 
-  return <audio ref={audioRef} autoPlay playsInline className="hidden" />;
+  return (
+    <audio
+      ref={audioRef}
+      autoPlay
+      playsInline
+      className="pointer-events-none absolute h-px w-px opacity-0"
+    />
+  );
 }
 
 function ExitIcon() {
@@ -2690,6 +3203,25 @@ function MenuIcon() {
       <path d="M4 7h16" />
       <path d="M4 12h16" />
       <path d="M4 17h16" />
+    </svg>
+  );
+}
+
+function EyeIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2 12c2.5-5 6.5-7.5 10-7.5S19.5 7 22 12c-2.5 5-6.5 7.5-10 7.5S4.5 17 2 12Z" />
+      <circle cx="12" cy="12" r="3" />
     </svg>
   );
 }

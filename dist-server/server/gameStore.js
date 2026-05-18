@@ -17,20 +17,25 @@ function pickDifficulty(difficulty) {
     if (isRealDifficulty(difficulty)) {
         return difficulty;
     }
-    const options = ["easy", "medium", "hard", "expert"];
+    const options = [
+        "beginner",
+        "easy",
+        "medium",
+        "hard",
+        "expert",
+        "master",
+    ];
     return options[Math.floor(Math.random() * options.length)];
 }
 function getBoardForDevice(room, deviceId) {
     if (deviceId) {
         const player = room.players[deviceId];
+        const spectatingDeviceId = player?.spectatingDeviceId ?? null;
+        if (spectatingDeviceId && room.boards[spectatingDeviceId]) {
+            return room.boards[spectatingDeviceId];
+        }
         if (player?.outcome === "active" && room.boards[deviceId]) {
             return room.boards[deviceId];
-        }
-        const activeOpponent = Object.values(room.players).find((otherPlayer) => otherPlayer.deviceId !== deviceId &&
-            otherPlayer.outcome === "active" &&
-            room.boards[otherPlayer.deviceId]);
-        if (activeOpponent) {
-            return room.boards[activeOpponent.deviceId];
         }
         if (room.boards[deviceId]) {
             return room.boards[deviceId];
@@ -45,9 +50,9 @@ function cloneRoom(room, deviceId) {
     cloned.board = structuredClone(getBoardForDevice(room, deviceId));
     // include a tailored notes view for the requesting device
     cloned.notes = structuredClone(getNotesForDevice(room, deviceId));
-    // compute spectators as display names of players who are not active but connected
+    // compute spectators as connected players who are explicitly watching another board
     cloned.spectators = Object.values(room.players)
-        .filter((p) => p.outcome !== "active" && p.connected)
+        .filter((p) => p.connected && p.spectatingDeviceId !== null)
         .map((p) => p.displayName);
     return cloned;
 }
@@ -57,8 +62,10 @@ function createPlayer(deviceId, displayName) {
         displayName,
         connected: true,
         ready: false,
+        rematchRequested: false,
         mistakes: 0,
         outcome: "active",
+        spectatingDeviceId: null,
         joinedAt: Date.now(),
         lastMoveAt: null,
         score: 0,
@@ -92,6 +99,58 @@ function ensureBoard(room, deviceId) {
 function countActivePlayers(room) {
     return Object.values(room.players).filter((player) => player.outcome === "active").length;
 }
+function getFirstActiveOpponentDeviceId(room, deviceId) {
+    const activeOpponent = Object.values(room.players).find((otherPlayer) => otherPlayer.deviceId !== deviceId &&
+        otherPlayer.outcome === "active" &&
+        room.boards[otherPlayer.deviceId]);
+    return activeOpponent?.deviceId ?? null;
+}
+function markPlayerAsFinished(player, outcome) {
+    player.outcome = outcome;
+    player.ready = false;
+    player.rematchRequested = false;
+    player.spectatingDeviceId = null;
+}
+async function startNextRound(room) {
+    const puzzle = generateSudokuPuzzle(room.difficulty);
+    const now = Date.now();
+    room.createdAt = now;
+    room.startedAt = 0;
+    room.phase = "lobby";
+    room.finishReason = null;
+    room.winnerDeviceId = null;
+    room.solvedAt = null;
+    room.countdownEndsAt = null;
+    room.puzzle = puzzle.puzzle;
+    room.board = [...puzzle.puzzle];
+    room.solution = puzzle.solution;
+    if (room.mode === "solo") {
+        room.expiresAt =
+            room.timerSeconds === null
+                ? Number.MAX_SAFE_INTEGER
+                : now + room.timerSeconds * 1000;
+    }
+    else if (room.timerSeconds === null) {
+        room.expiresAt = Number.MAX_SAFE_INTEGER;
+    }
+    else {
+        room.expiresAt = now + room.timerSeconds * 1000;
+    }
+    room.boards = {};
+    room.notes = {};
+    for (const player of Object.values(room.players)) {
+        player.outcome = "active";
+        player.ready = false;
+        player.rematchRequested = false;
+        player.mistakes = 0;
+        player.lastMoveAt = null;
+        player.score = 0;
+        player.spectatingDeviceId = null;
+        room.boards[player.deviceId] = [...puzzle.puzzle];
+        room.notes[player.deviceId] = {};
+    }
+    return cloneRoom(room);
+}
 function hasAllConnectedPlayersReady(room) {
     const connectedActivePlayers = Object.values(room.players).filter((player) => player.connected && player.outcome === "active");
     return (connectedActivePlayers.length > 0 &&
@@ -124,6 +183,7 @@ async function finishRoom(room, reason, winnerDeviceId) {
     if (reason === "solved" && winnerDeviceId) {
         const winner = room.players[winnerDeviceId];
         if (winner) {
+            const shouldRecordWin = winner.outcome !== "won";
             winner.outcome = "won";
             // award win bonus and time-left bonus for timed games
             const baseBonus = 100;
@@ -133,8 +193,10 @@ async function finishRoom(room, reason, winnerDeviceId) {
                 timeLeftBonus = Math.max(0, Math.floor((room.expiresAt - now) / 1000));
             }
             const bonus = baseBonus + timeLeftBonus;
-            winner.score = (winner.score ?? 0) + bonus;
-            await recordWin(winner.deviceId, winner.displayName, solveTimeMs, bonus);
+            if (shouldRecordWin) {
+                winner.score = (winner.score ?? 0) + bonus;
+                await recordWin(winner.deviceId, winner.displayName, solveTimeMs, bonus);
+            }
         }
         for (const player of Object.values(room.players)) {
             if (player.deviceId === winnerDeviceId || player.outcome !== "active") {
@@ -221,6 +283,10 @@ function getNotesForDevice(room, deviceId) {
     if (!room.notes)
         return {};
     const viewer = deviceId ? room.players[deviceId] : null;
+    const spectatingTargetId = viewer?.spectatingDeviceId ?? null;
+    if (spectatingTargetId) {
+        return room.notes[spectatingTargetId] ?? {};
+    }
     // If the requesting device is still active, only show their own notes
     if (viewer && viewer.outcome === "active") {
         return room.notes[deviceId] ?? {};
@@ -256,16 +322,18 @@ export async function joinRoom(payload) {
     const isJoiningActiveSoloGame = room.mode === "solo" && room.phase === "active";
     const shouldBeSpectator = isJoiningActiveSoloGame &&
         Object.values(room.players).some((p) => p.outcome === "active");
+    const shouldCapBattlePlayers = room.mode === "battle" && countActivePlayers(room) >= 2;
     const player = ensurePlayer(room, payload.deviceId, payload.displayName);
-    if (shouldBeSpectator) {
+    if (shouldBeSpectator || shouldCapBattlePlayers) {
         player.outcome = "lost"; // spectators use "lost" as non-active outcome
+        player.spectatingDeviceId = getFirstActiveOpponentDeviceId(room, payload.deviceId);
     }
     player.connected = true;
     player.ready = false;
     ensureBoard(room, payload.deviceId);
     await recordRoomJoined(payload.deviceId, payload.displayName);
     const stats = await getDeviceStats(payload.deviceId, payload.displayName);
-    if (room.mode === "battle") {
+    if (room.mode === "battle" && !shouldCapBattlePlayers) {
         clearBattleCountdown(room);
     }
     return {
@@ -345,14 +413,32 @@ export async function submitCell(payload) {
         player.lastMoveAt = Date.now();
         await recordCorrectPlacement(payload.deviceId, payload.displayName);
         player.score = (player.score ?? 0) + 10;
-        const stats = await getDeviceStats(payload.deviceId, payload.displayName);
         if (isSolvedBoard(board, room.solution)) {
-            const finishedRoom = await finishRoom(room, "solved", payload.deviceId);
+            markPlayerAsFinished(player, "won");
+            const solveTimeMs = Date.now() - room.startedAt;
+            const baseBonus = 100;
+            let timeLeftBonus = 0;
+            const largeThreshold = Date.now() + 100 * 365 * 24 * 3600 * 1000;
+            if (Number.isFinite(room.expiresAt) && room.expiresAt < largeThreshold) {
+                timeLeftBonus = Math.max(0, Math.floor((room.expiresAt - Date.now()) / 1000));
+            }
+            const bonus = baseBonus + timeLeftBonus;
+            player.score = (player.score ?? 0) + bonus;
+            await recordWin(player.deviceId, player.displayName, solveTimeMs, bonus);
+            const stats = await getDeviceStats(payload.deviceId, payload.displayName);
+            if (countActivePlayers(room) === 0) {
+                const finishedRoom = await finishRoom(room, "solved", payload.deviceId);
+                return {
+                    room: finishedRoom,
+                    stats,
+                };
+            }
             return {
-                room: finishedRoom,
+                room: cloneRoom(room, payload.deviceId),
                 stats,
             };
         }
+        const stats = await getDeviceStats(payload.deviceId, payload.displayName);
         return {
             room: cloneRoom(room, payload.deviceId),
             stats,
@@ -367,11 +453,10 @@ export async function submitCell(payload) {
     player.lastMoveAt = Date.now();
     await recordMistake(payload.deviceId, payload.displayName);
     player.score = (player.score ?? 0) - 5;
-    const stats = await getDeviceStats(payload.deviceId, payload.displayName);
     if (player.mistakes >= 3) {
-        player.outcome = "lost";
-        player.ready = false;
+        markPlayerAsFinished(player, "lost");
         await recordLoss(payload.deviceId, payload.displayName);
+        const stats = await getDeviceStats(payload.deviceId, payload.displayName);
         if (countActivePlayers(room) === 0) {
             const finishedRoom = await finishRoom(room, "all-eliminated", null);
             return {
@@ -379,7 +464,17 @@ export async function submitCell(payload) {
                 stats,
             };
         }
+        return {
+            room: cloneRoom(room, payload.deviceId),
+            stats,
+            moveOutcome: {
+                type: "wrong",
+                index,
+                value: payload.value,
+            },
+        };
     }
+    const stats = await getDeviceStats(payload.deviceId, payload.displayName);
     return {
         room: cloneRoom(room, payload.deviceId),
         stats,
@@ -404,6 +499,52 @@ export async function markPlayerDisconnected(roomCode, deviceId) {
         clearBattleCountdown(room);
     }
     return cloneRoom(room);
+}
+export async function spectateRoom(roomCode, deviceId, targetDeviceId) {
+    const room = rooms.get(roomCode);
+    if (!room) {
+        throw new Error("That room does not exist anymore.");
+    }
+    const player = room.players[deviceId];
+    if (!player) {
+        throw new Error("You are not part of this room.");
+    }
+    if (targetDeviceId === null) {
+        player.spectatingDeviceId = null;
+        return cloneRoom(room, deviceId);
+    }
+    const target = room.players[targetDeviceId];
+    if (!target || target.deviceId === deviceId) {
+        throw new Error("That board is not available to spectate.");
+    }
+    player.spectatingDeviceId = targetDeviceId;
+    return cloneRoom(room, deviceId);
+}
+export async function rematchRoom(roomCode, deviceId) {
+    const room = rooms.get(roomCode);
+    if (!room) {
+        throw new Error("That room does not exist anymore.");
+    }
+    if (room.mode !== "battle") {
+        throw new Error("Rematches are only available in battle rooms.");
+    }
+    if (room.phase !== "finished") {
+        throw new Error("The room is not ready for a rematch yet.");
+    }
+    const player = room.players[deviceId];
+    if (!player) {
+        throw new Error("You are not part of this room.");
+    }
+    if (room.mode !== "battle") {
+        throw new Error("Rematches are only available in battle rooms.");
+    }
+    player.rematchRequested = true;
+    const connectedPlayers = Object.values(room.players).filter((candidate) => candidate.connected);
+    if (connectedPlayers.length > 0 &&
+        connectedPlayers.every((candidate) => candidate.rematchRequested)) {
+        return startNextRound(room);
+    }
+    return cloneRoom(room, deviceId);
 }
 export async function setPlayerReady(payload) {
     const room = rooms.get(payload.roomCode);
