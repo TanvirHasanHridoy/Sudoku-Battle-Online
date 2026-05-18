@@ -75,6 +75,21 @@ interface VoicePeerState {
   pendingCandidates: VoiceCandidatePayload[];
 }
 
+interface VoiceDebugState {
+  sentChunks: number;
+  lastSentBytes: number;
+  lastSentMimeType: string;
+  lastSentAt: number | null;
+  receivedChunks: number;
+  lastChunkBytes: number;
+  lastMimeType: string;
+  lastFromDeviceId: string;
+  lastReceivedAt: number | null;
+  recorderState: string;
+  lastError: string | null;
+  events: string[];
+}
+
 function formatTime(totalSeconds: number) {
   const safeSeconds = Math.max(0, Math.floor(totalSeconds));
   const minutes = Math.floor(safeSeconds / 60)
@@ -256,6 +271,20 @@ export default function App() {
     "idle" | "starting" | "active" | "error"
   >("idle");
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voiceDebug, setVoiceDebug] = useState<VoiceDebugState>({
+    sentChunks: 0,
+    lastSentBytes: 0,
+    lastSentMimeType: "",
+    lastSentAt: null,
+    receivedChunks: 0,
+    lastChunkBytes: 0,
+    lastMimeType: "",
+    lastFromDeviceId: "",
+    lastReceivedAt: null,
+    recorderState: "inactive",
+    lastError: null,
+    events: [],
+  });
   const [voiceStreams, setVoiceStreams] = useState<
     Record<string, MediaStream | null>
   >({});
@@ -310,8 +339,10 @@ export default function App() {
   const socketRef = useRef<GameSocket | null>(null);
   const initialRoomAction = useRef<"join" | "reconnect" | null>(null);
   const autoJoinAttempted = useRef(false);
+  const roomRef = useRef<RoomState | null>(null);
   const voiceLocalStreamRef = useRef<MediaStream | null>(null);
   const voiceRecorderRef = useRef<MediaRecorder | null>(null);
+  const voiceRecorderFlushTimerRef = useRef<number | null>(null);
   const voicePeersRef = useRef<Record<string, VoicePeerState>>({});
   const voiceTargetIdsRef = useRef<string[]>([]);
 
@@ -543,6 +574,10 @@ export default function App() {
   }, [room?.phase]);
 
   useEffect(() => {
+    roomRef.current = room;
+  }, [room]);
+
+  useEffect(() => {
     // play sounds when the player's score changes (per-move or on win)
     const prev = prevScoreRef.current ?? stats?.totalScore ?? 0;
     const current = room
@@ -740,7 +775,6 @@ export default function App() {
       socket.off("voice:signal", handleVoiceSignalEvent);
       socket.off("voice:audio", handleVoiceAudioEvent);
       socket.off("connect", handleConnect);
-      socket.disconnect();
     };
   }, [deviceId, displayNameDraft]);
 
@@ -1101,7 +1135,14 @@ export default function App() {
       return existing;
     }
 
-    const pc = new RTCPeerConnection();
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        {
+          urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"],
+        },
+      ],
+      iceCandidatePoolSize: 10,
+    });
     const transceiver = pc.addTransceiver("audio", { direction: "sendrecv" });
     const peerState: VoicePeerState = {
       pc,
@@ -1205,6 +1246,11 @@ export default function App() {
   async function stopVoiceChat() {
     const targetIds = Object.keys(voicePeersRef.current);
 
+    if (voiceRecorderFlushTimerRef.current !== null) {
+      window.clearInterval(voiceRecorderFlushTimerRef.current);
+      voiceRecorderFlushTimerRef.current = null;
+    }
+
     if (room) {
       await Promise.all(
         targetIds.map((targetDeviceId) =>
@@ -1242,6 +1288,10 @@ export default function App() {
     }
 
     setVoiceStatus("idle");
+    setVoiceDebug((current) => ({
+      ...current,
+      recorderState: "inactive",
+    }));
   }
 
   async function ensureVoiceChat() {
@@ -1281,12 +1331,59 @@ export default function App() {
         mimeType ? { mimeType } : undefined,
       );
 
+      recorder.onstart = () => {
+        setVoiceDebug((current) => ({
+          ...current,
+          recorderState: recorder.state,
+          lastError: null,
+        }));
+        appendVoiceDebugEvent(
+          `recorder started (${mimeType || "browser-default"})`,
+        );
+      };
+
+      recorder.onstop = () => {
+        setVoiceDebug((current) => ({
+          ...current,
+          recorderState: recorder.state,
+        }));
+        appendVoiceDebugEvent("recorder stopped");
+      };
+
+      recorder.onerror = (event) => {
+        const message =
+          (event as Event & { error?: DOMException }).error?.message ||
+          "MediaRecorder error";
+        setVoiceDebug((current) => ({
+          ...current,
+          lastError: message,
+        }));
+        appendVoiceDebugEvent(`recorder error: ${message}`);
+      };
+
       recorder.ondataavailable = (event) => {
-        if (!room || !event.data.size) {
+        if (!room) {
+          return;
+        }
+
+        if (!event.data.size) {
+          appendVoiceDebugEvent("tx empty chunk (0 bytes)");
           return;
         }
 
         void event.data.arrayBuffer().then((chunk) => {
+          setVoiceDebug((current) => ({
+            ...current,
+            sentChunks: current.sentChunks + 1,
+            lastSentBytes: chunk.byteLength,
+            lastSentMimeType: event.data.type || mimeType || "audio/webm",
+            lastSentAt: Date.now(),
+            recorderState: recorder.state,
+          }));
+          appendVoiceDebugEvent(
+            `tx ${chunk.byteLength} bytes (${event.data.type || mimeType || "audio/webm"})`,
+          );
+
           void emitVoiceAudio({
             roomCode: room.roomCode,
             fromDeviceId: deviceId,
@@ -1298,6 +1395,18 @@ export default function App() {
 
       recorder.start(250);
       voiceRecorderRef.current = recorder;
+      if (voiceRecorderFlushTimerRef.current !== null) {
+        window.clearInterval(voiceRecorderFlushTimerRef.current);
+      }
+      voiceRecorderFlushTimerRef.current = window.setInterval(() => {
+        try {
+          if (recorder.state === "recording") {
+            recorder.requestData();
+          }
+        } catch {
+          // ignore periodic flush failures
+        }
+      }, 300);
 
       setVoiceStatus("active");
     } catch (error) {
@@ -1318,8 +1427,21 @@ export default function App() {
     await ensureVoiceChat();
   }
 
+  function appendVoiceDebugEvent(message: string) {
+    const stamp = new Date().toLocaleTimeString();
+    setVoiceDebug((current) => {
+      const nextEvents = [...current.events, `${stamp} - ${message}`];
+      return {
+        ...current,
+        events: nextEvents.slice(-6),
+      };
+    });
+  }
+
   async function handleVoiceSignal(payload: VoiceSignalPayload) {
-    if (!room || payload.roomCode !== room.roomCode) {
+    const currentRoom = roomRef.current;
+
+    if (!currentRoom || payload.roomCode !== currentRoom.roomCode) {
       return;
     }
 
@@ -1366,7 +1488,7 @@ export default function App() {
       await peer.pc.setLocalDescription(answer);
 
       await emitVoiceSignal({
-        roomCode: room.roomCode,
+        roomCode: currentRoom.roomCode,
         fromDeviceId: deviceId,
         toDeviceId: payload.fromDeviceId,
         kind: "answer",
@@ -1386,7 +1508,9 @@ export default function App() {
   }
 
   function handleVoiceAudio(payload: VoiceAudioPayload) {
-    if (!room || payload.roomCode !== room.roomCode) {
+    const currentRoom = roomRef.current;
+
+    if (!currentRoom || payload.roomCode !== currentRoom.roomCode) {
       return;
     }
 
@@ -1394,16 +1518,99 @@ export default function App() {
       return;
     }
 
-    const blob = new Blob([payload.chunk], {
-      type: payload.mimeType || "audio/webm",
-    });
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
+    setVoiceDebug((current) => ({
+      ...current,
+      receivedChunks: current.receivedChunks + 1,
+      lastChunkBytes: payload.chunk.byteLength,
+      lastMimeType: payload.mimeType || "audio/webm",
+      lastFromDeviceId: payload.fromDeviceId,
+      lastReceivedAt: Date.now(),
+      lastError: null,
+    }));
+    appendVoiceDebugEvent(
+      `rx ${payload.chunk.byteLength} bytes (${payload.mimeType || "audio/webm"}) from ${payload.fromDeviceId.slice(0, 6).toUpperCase()}`,
+    );
 
-    audio.onended = () => URL.revokeObjectURL(url);
-    audio.play().catch(() => {
-      URL.revokeObjectURL(url);
-    });
+    // Try simple Audio element playback first, then fall back to Web Audio decode and play
+    try {
+      const blob = new Blob([payload.chunk], {
+        type: payload.mimeType || "audio/webm",
+      });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+
+      audio.onended = () => URL.revokeObjectURL(url);
+      audio.play().catch((err) => {
+        console.debug("Audio element playback failed, falling back to AudioContext:", err);
+        setVoiceDebug((current) => ({
+          ...current,
+          lastError: `Audio element playback failed: ${String(err)}`,
+        }));
+        appendVoiceDebugEvent("audio.play() failed, trying AudioContext decode");
+        URL.revokeObjectURL(url);
+        // fallback below
+        try {
+          const ac = audioContextRef.current ?? new (window.AudioContext || (window as any).webkitAudioContext)();
+          audioContextRef.current = ac;
+          ac.decodeAudioData(payload.chunk.slice(0), (buffer) => {
+            const src = ac.createBufferSource();
+            src.buffer = buffer;
+            src.connect(ac.destination);
+            src.start();
+            appendVoiceDebugEvent("AudioContext fallback decode/play succeeded");
+          }, (err2) => {
+            console.warn("Failed to decode audio chunk:", err2);
+            setVoiceDebug((current) => ({
+              ...current,
+              lastError: `Decode failed: ${String(err2)}`,
+            }));
+            appendVoiceDebugEvent("AudioContext decode failed");
+          });
+        } catch (err3) {
+          console.warn("Voice playback failed:", err3);
+          setVoiceDebug((current) => ({
+            ...current,
+            lastError: `Playback failed: ${String(err3)}`,
+          }));
+          appendVoiceDebugEvent("AudioContext fallback threw an exception");
+        }
+      });
+      return;
+    } catch (err) {
+      console.debug("Voice playback initial attempt threw:", err);
+      setVoiceDebug((current) => ({
+        ...current,
+        lastError: `Initial playback threw: ${String(err)}`,
+      }));
+      appendVoiceDebugEvent("Initial blob playback threw an exception");
+    }
+
+    // As a final fallback, attempt to decode via AudioContext directly
+    try {
+      const ac = audioContextRef.current ?? new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = ac;
+      ac.decodeAudioData(payload.chunk.slice(0), (buffer) => {
+        const src = ac.createBufferSource();
+        src.buffer = buffer;
+        src.connect(ac.destination);
+        src.start();
+        appendVoiceDebugEvent("Final AudioContext decode/play succeeded");
+      }, (err) => {
+        console.warn("Failed to decode audio chunk fallback:", err);
+        setVoiceDebug((current) => ({
+          ...current,
+          lastError: `Final decode failed: ${String(err)}`,
+        }));
+        appendVoiceDebugEvent("Final AudioContext decode failed");
+      });
+    } catch (err) {
+      console.warn("Voice playback completely failed:", err);
+      setVoiceDebug((current) => ({
+        ...current,
+        lastError: `Playback failed completely: ${String(err)}`,
+      }));
+      appendVoiceDebugEvent("Playback failed completely");
+    }
   }
 
   async function createRoom() {
@@ -2067,12 +2274,13 @@ export default function App() {
       ? Object.values(room.players).filter(
           (player) =>
             player.deviceId !== deviceId &&
-            player.spectatingDeviceId === deviceId,
+            player.spectatingDeviceId === deviceId &&
+            player.connected,
         )
       : [];
   const opponent = room
     ? (Object.values(room.players).find(
-        (p) => p.deviceId !== deviceId && p.outcome === "active",
+        (p) => p.deviceId !== deviceId && p.outcome === "active" && p.connected,
       ) ?? null)
     : null;
   const canInteract =
@@ -2588,25 +2796,27 @@ export default function App() {
                         {mistakesLeft}/3
                       </p>
                     </div>
-                    {/* Scoreboard */}
+                    {/* Scoreboard (only show connected players) */}
                     <div className="flex flex-wrap justify-center gap-2">
-                      {Object.values(room.players).map((player) => (
-                        <div
-                          key={player.deviceId}
-                          className={`rounded-2xl border px-3 py-2 ${
-                            player.deviceId === deviceId
-                              ? "border-sky-400 bg-sky-400/15"
-                              : "border-white/10 bg-slate-950/50"
-                          }`}
-                        >
-                          <p className="text-[0.65rem] uppercase tracking-[0.3em] text-slate-500 truncate max-w-[8rem]">
-                            {player.displayName}
-                          </p>
-                          <p className="text-base font-semibold text-white">
-                            {player.score}
-                          </p>
-                        </div>
-                      ))}
+                      {Object.values(room.players)
+                        .filter((p) => p.connected)
+                        .map((player) => (
+                          <div
+                            key={player.deviceId}
+                            className={`rounded-2xl border px-3 py-2 ${
+                              player.deviceId === deviceId
+                                ? "border-sky-400 bg-sky-400/15"
+                                : "border-white/10 bg-slate-950/50"
+                            }`}
+                          >
+                            <p className="text-[0.65rem] uppercase tracking-[0.3em] text-slate-500 truncate max-w-[8rem]">
+                              {player.displayName}
+                            </p>
+                            <p className="text-base font-semibold text-white">
+                              {player.score}
+                            </p>
+                          </div>
+                        ))}
                     </div>
                   </div>
 
@@ -2820,6 +3030,43 @@ export default function App() {
                               : "Off"}
                         {voiceError ? ` - ${voiceError}` : ""}
                       </p>
+                    ) : null}
+                    {room.mode === "battle" ? (
+                      <div className="mt-3 rounded-2xl border border-white/10 bg-slate-900/40 p-3 text-xs text-slate-300">
+                        <p className="uppercase tracking-[0.28em] text-slate-400">
+                          Voice debug
+                        </p>
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <p>TX chunks: {voiceDebug.sentChunks}</p>
+                          <p>TX bytes: {voiceDebug.lastSentBytes}</p>
+                          <p>RX chunks: {voiceDebug.receivedChunks}</p>
+                          <p>RX bytes: {voiceDebug.lastChunkBytes}</p>
+                          <p className="truncate">TX mime: {voiceDebug.lastSentMimeType || "n/a"}</p>
+                          <p className="truncate">Mime: {voiceDebug.lastMimeType || "n/a"}</p>
+                          <p className="truncate">
+                            From: {voiceDebug.lastFromDeviceId ? voiceDebug.lastFromDeviceId.slice(0, 8).toUpperCase() : "n/a"}
+                          </p>
+                          <p>Recorder: {voiceDebug.recorderState}</p>
+                        </div>
+                        <p className="mt-2 truncate">
+                          Last TX: {voiceDebug.lastSentAt ? new Date(voiceDebug.lastSentAt).toLocaleTimeString() : "n/a"}
+                        </p>
+                        <p className="truncate">
+                          Last RX: {voiceDebug.lastReceivedAt ? new Date(voiceDebug.lastReceivedAt).toLocaleTimeString() : "n/a"}
+                        </p>
+                        {voiceDebug.lastError ? (
+                          <p className="mt-1 text-rose-300">Error: {voiceDebug.lastError}</p>
+                        ) : null}
+                        {voiceDebug.events.length > 0 ? (
+                          <div className="mt-2 space-y-1 border-t border-white/10 pt-2">
+                            {voiceDebug.events.map((line, index) => (
+                              <p key={`${line}-${index}`} className="truncate text-slate-400">
+                                {line}
+                              </p>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
                     ) : null}
                   </div>
 
