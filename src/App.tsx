@@ -1138,7 +1138,10 @@ export default function App() {
     const pc = new RTCPeerConnection({
       iceServers: [
         {
-          urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"],
+          urls: [
+            "stun:stun.l.google.com:19302",
+            "stun:stun1.l.google.com:19302",
+          ],
         },
       ],
       iceCandidatePoolSize: 10,
@@ -1541,31 +1544,44 @@ export default function App() {
 
       audio.onended = () => URL.revokeObjectURL(url);
       audio.play().catch((err) => {
-        console.debug("Audio element playback failed, falling back to AudioContext:", err);
+        console.debug(
+          "Audio element playback failed, falling back to AudioContext:",
+          err,
+        );
         setVoiceDebug((current) => ({
           ...current,
           lastError: `Audio element playback failed: ${String(err)}`,
         }));
-        appendVoiceDebugEvent("audio.play() failed, trying AudioContext decode");
+        appendVoiceDebugEvent(
+          "audio.play() failed, trying AudioContext decode",
+        );
         URL.revokeObjectURL(url);
         // fallback below
         try {
-          const ac = audioContextRef.current ?? new (window.AudioContext || (window as any).webkitAudioContext)();
+          const ac =
+            audioContextRef.current ??
+            new (window.AudioContext || (window as any).webkitAudioContext)();
           audioContextRef.current = ac;
-          ac.decodeAudioData(payload.chunk.slice(0), (buffer) => {
-            const src = ac.createBufferSource();
-            src.buffer = buffer;
-            src.connect(ac.destination);
-            src.start();
-            appendVoiceDebugEvent("AudioContext fallback decode/play succeeded");
-          }, (err2) => {
-            console.warn("Failed to decode audio chunk:", err2);
-            setVoiceDebug((current) => ({
-              ...current,
-              lastError: `Decode failed: ${String(err2)}`,
-            }));
-            appendVoiceDebugEvent("AudioContext decode failed");
-          });
+          ac.decodeAudioData(
+            payload.chunk.slice(0),
+            (buffer) => {
+              const src = ac.createBufferSource();
+              src.buffer = buffer;
+              src.connect(ac.destination);
+              src.start();
+              appendVoiceDebugEvent(
+                "AudioContext fallback decode/play succeeded",
+              );
+            },
+            (err2) => {
+              console.warn("Failed to decode audio chunk:", err2);
+              setVoiceDebug((current) => ({
+                ...current,
+                lastError: `Decode failed: ${String(err2)}`,
+              }));
+              appendVoiceDebugEvent("AudioContext decode failed");
+            },
+          );
         } catch (err3) {
           console.warn("Voice playback failed:", err3);
           setVoiceDebug((current) => ({
@@ -1587,22 +1603,28 @@ export default function App() {
 
     // As a final fallback, attempt to decode via AudioContext directly
     try {
-      const ac = audioContextRef.current ?? new (window.AudioContext || (window as any).webkitAudioContext)();
+      const ac =
+        audioContextRef.current ??
+        new (window.AudioContext || (window as any).webkitAudioContext)();
       audioContextRef.current = ac;
-      ac.decodeAudioData(payload.chunk.slice(0), (buffer) => {
-        const src = ac.createBufferSource();
-        src.buffer = buffer;
-        src.connect(ac.destination);
-        src.start();
-        appendVoiceDebugEvent("Final AudioContext decode/play succeeded");
-      }, (err) => {
-        console.warn("Failed to decode audio chunk fallback:", err);
-        setVoiceDebug((current) => ({
-          ...current,
-          lastError: `Final decode failed: ${String(err)}`,
-        }));
-        appendVoiceDebugEvent("Final AudioContext decode failed");
-      });
+      ac.decodeAudioData(
+        payload.chunk.slice(0),
+        (buffer) => {
+          const src = ac.createBufferSource();
+          src.buffer = buffer;
+          src.connect(ac.destination);
+          src.start();
+          appendVoiceDebugEvent("Final AudioContext decode/play succeeded");
+        },
+        (err) => {
+          console.warn("Failed to decode audio chunk fallback:", err);
+          setVoiceDebug((current) => ({
+            ...current,
+            lastError: `Final decode failed: ${String(err)}`,
+          }));
+          appendVoiceDebugEvent("Final AudioContext decode failed");
+        },
+      );
     } catch (err) {
       console.warn("Voice playback completely failed:", err);
       setVoiceDebug((current) => ({
@@ -3041,26 +3063,50 @@ export default function App() {
                           <p>TX bytes: {voiceDebug.lastSentBytes}</p>
                           <p>RX chunks: {voiceDebug.receivedChunks}</p>
                           <p>RX bytes: {voiceDebug.lastChunkBytes}</p>
-                          <p className="truncate">TX mime: {voiceDebug.lastSentMimeType || "n/a"}</p>
-                          <p className="truncate">Mime: {voiceDebug.lastMimeType || "n/a"}</p>
                           <p className="truncate">
-                            From: {voiceDebug.lastFromDeviceId ? voiceDebug.lastFromDeviceId.slice(0, 8).toUpperCase() : "n/a"}
+                            TX mime: {voiceDebug.lastSentMimeType || "n/a"}
+                          </p>
+                          <p className="truncate">
+                            Mime: {voiceDebug.lastMimeType || "n/a"}
+                          </p>
+                          <p className="truncate">
+                            From:{" "}
+                            {voiceDebug.lastFromDeviceId
+                              ? voiceDebug.lastFromDeviceId
+                                  .slice(0, 8)
+                                  .toUpperCase()
+                              : "n/a"}
                           </p>
                           <p>Recorder: {voiceDebug.recorderState}</p>
                         </div>
                         <p className="mt-2 truncate">
-                          Last TX: {voiceDebug.lastSentAt ? new Date(voiceDebug.lastSentAt).toLocaleTimeString() : "n/a"}
+                          Last TX:{" "}
+                          {voiceDebug.lastSentAt
+                            ? new Date(
+                                voiceDebug.lastSentAt,
+                              ).toLocaleTimeString()
+                            : "n/a"}
                         </p>
                         <p className="truncate">
-                          Last RX: {voiceDebug.lastReceivedAt ? new Date(voiceDebug.lastReceivedAt).toLocaleTimeString() : "n/a"}
+                          Last RX:{" "}
+                          {voiceDebug.lastReceivedAt
+                            ? new Date(
+                                voiceDebug.lastReceivedAt,
+                              ).toLocaleTimeString()
+                            : "n/a"}
                         </p>
                         {voiceDebug.lastError ? (
-                          <p className="mt-1 text-rose-300">Error: {voiceDebug.lastError}</p>
+                          <p className="mt-1 text-rose-300">
+                            Error: {voiceDebug.lastError}
+                          </p>
                         ) : null}
                         {voiceDebug.events.length > 0 ? (
                           <div className="mt-2 space-y-1 border-t border-white/10 pt-2">
                             {voiceDebug.events.map((line, index) => (
-                              <p key={`${line}-${index}`} className="truncate text-slate-400">
+                              <p
+                                key={`${line}-${index}`}
+                                className="truncate text-slate-400"
+                              >
                                 {line}
                               </p>
                             ))}
