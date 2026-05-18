@@ -14,12 +14,30 @@
     "fastestSolveMs": null,
     "bestWinStreak": 0,
     "currentWinStreak": 0,
-    "lastSeenAt": 1779139223366,
-    "updatedAt": 1779139223366
+    "lastSeenAt": 1779143298338,
+    "updatedAt": 1779143298338
   },
   "device-vifa0uwm": {
     "deviceId": "device-vifa0uwm",
     "displayName": "Hridoy",
+    "gamesPlayed": 0,
+    "roomsCreated": 2,
+    "roomsJoined": 6,
+    "wins": 0,
+    "losses": 0,
+    "mistakes": 0,
+    "correctPlacements": 0,
+    "wrongPlacements": 0,
+    "totalScore": 0,
+    "fastestSolveMs": null,
+    "bestWinStreak": 0,
+    "currentWinStreak": 0,
+    "lastSeenAt": 1779143298361,
+    "updatedAt": 1779143298361
+  },
+  "device-4xom6ch5": {
+    "deviceId": "device-4xom6ch5",
+    "displayName": "Hridoy Bhaia",
     "gamesPlayed": 0,
     "roomsCreated": 0,
     "roomsJoined": 0,
@@ -34,23 +52,5 @@
     "currentWinStreak": 0,
     "lastSeenAt": 1779139223359,
     "updatedAt": 1779139223359
-  },
-  "8168f30d-52e7-423e-9e66-8e541cdecc85": {
-    "deviceId": "8168f30d-52e7-423e-9e66-8e541cdecc85",
-    "displayName": "Jesse",
-    "gamesPlayed": 0,
-    "roomsCreated": 0,
-    "roomsJoined": 0,
-    "wins": 0,
-    "losses": 0,
-    "mistakes": 0,
-    "correctPlacements": 0,
-    "wrongPlacements": 0,
-    "totalScore": 0,
-    "fastestSolveMs": null,
-    "bestWinStreak": 0,
-    "currentWinStreak": 0,
-    "lastSeenAt": 1779145209392,
-    "updatedAt": 1779145209392
   }
 }
