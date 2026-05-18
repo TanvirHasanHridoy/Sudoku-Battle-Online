@@ -196,17 +196,42 @@ io.on("connection", (socket) => {
     });
     socket.on("voice:audio", async (payload) => {
         try {
-            if (!payload.roomCode || payload.fromDeviceId !== socket.data.deviceId) {
+            if (!payload.roomCode) {
                 throw new Error("That voice message cannot be sent.");
             }
-            const room = getRoomForDevice(payload.roomCode, payload.fromDeviceId);
+            // Recover missing socket metadata after reconnects in local/dev flows.
+            if (!socket.data.deviceId) {
+                socket.data.deviceId = payload.fromDeviceId;
+            }
+            if (!socket.data.roomCode) {
+                socket.data.roomCode = payload.roomCode;
+            }
+            if (payload.fromDeviceId !== socket.data.deviceId) {
+                throw new Error("That voice message cannot be sent.");
+            }
+            const room = getRoom(payload.roomCode);
             if (!room || !room.players[payload.fromDeviceId]) {
                 throw new Error("That player is not in your room.");
             }
-            socket.to(payload.roomCode).emit("voice:audio", payload);
+            socket.join(payload.roomCode);
+            const sockets = await io.in(payload.roomCode).fetchSockets();
+            const recipients = sockets.filter((roomSocket) => roomSocket.data.deviceId !== payload.fromDeviceId);
+            for (const recipient of recipients) {
+                recipient.emit("voice:audio", payload);
+            }
+            if (recipients.length === 0) {
+                throw new Error("No recipients available in this room.");
+            }
         }
-        catch {
-            // ignore transient voice relay failures
+        catch (error) {
+            const message = error instanceof Error ? error.message : "Unable to relay voice audio.";
+            socket.emit("room:error", message);
+            console.warn("voice:audio relay failed", {
+                message,
+                roomCode: payload.roomCode,
+                fromDeviceId: payload.fromDeviceId,
+                socketDeviceId: socket.data.deviceId,
+            });
         }
     });
     socket.on("notes:update", async (payload, callback) => {
