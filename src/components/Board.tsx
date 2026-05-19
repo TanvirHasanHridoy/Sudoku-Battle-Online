@@ -116,7 +116,7 @@ export function Board({
                 event.preventDefault();
                 onSelect(index);
               }}
-              className={`touch-manipulation relative aspect-square border border-[var(--board-cell-border)] text-[clamp(0.95rem,4vw,1.15rem)] font-semibold transition duration-150 sm:text-lg ${cellBg} ${cellText} ${borderClasses.join(" ")} ${disabled ? "cursor-not-allowed opacity-70" : isSelected ? "" : "hover:bg-[var(--board-hover-bg)]"}`}
+              className={`touch-manipulation relative aspect-square border border-[var(--board-cell-border)] text-[clamp(0.95rem,4vw,1.15rem)] font-semibold  sm:text-lg ${cellBg} ${cellText} ${borderClasses.join(" ")} ${disabled ? "cursor-not-allowed opacity-70" : isSelected ? "" : "hover:bg-[var(--board-hover-bg)]"}`}
               aria-label={`Cell ${row + 1}, ${col + 1}${fixed ? ", fixed" : ""}`}
             >
               <span className="absolute inset-0 flex items-center justify-center">
@@ -141,7 +141,7 @@ export function Board({
                     return (
                       <span
                         key={digit}
-                        className={`flex items-center justify-center ${present ? "text-slate-100" : "text-slate-600"}`}
+                        className={`flex items-center justify-center ${present ? "text-[var(--board-note-text)]" : "text-slate-600"}`}
                         aria-hidden="true"
                       >
                         {present ? digit : ""}

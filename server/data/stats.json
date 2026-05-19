@@ -74,19 +74,19 @@
   "30cb55a2-b59e-4733-a188-0738b767a92d": {
     "deviceId": "30cb55a2-b59e-4733-a188-0738b767a92d",
     "displayName": "Hrido\\y",
-    "gamesPlayed": 3,
-    "roomsCreated": 10,
-    "roomsJoined": 24,
+    "gamesPlayed": 5,
+    "roomsCreated": 17,
+    "roomsJoined": 35,
     "wins": 0,
-    "losses": 3,
-    "mistakes": 1,
-    "correctPlacements": 6,
-    "wrongPlacements": 1,
-    "totalScore": 55,
+    "losses": 5,
+    "mistakes": 4,
+    "correctPlacements": 14,
+    "wrongPlacements": 4,
+    "totalScore": 120,
     "fastestSolveMs": null,
     "bestWinStreak": 0,
     "currentWinStreak": 0,
-    "lastSeenAt": 1779163167635,
-    "updatedAt": 1779163167635
+    "lastSeenAt": 1779169231361,
+    "updatedAt": 1779169231361
   }
 }

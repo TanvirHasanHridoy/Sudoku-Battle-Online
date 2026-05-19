@@ -563,7 +563,7 @@ export default function App() {
       pushToast("You won this round.", "success");
       playSound("win");
     } else if (outcome === "lost") {
-      pushToast("You lost this round.", "danger");
+      pushToast("You lost this round.", "danger", true);
       playSound("loss");
     } else {
       pushToast("Round finished.", "neutral");

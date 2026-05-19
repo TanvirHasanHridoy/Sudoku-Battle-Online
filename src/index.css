@@ -17,22 +17,32 @@
     ),
     linear-gradient(180deg, #06111f 0%, #030712 100%);
   --app-text: #e2e8f0;
-  --board-surface: rgba(2, 6, 23, 0.72);
+  --board-surface: rgba(0, 9, 49, 0.72);
   --board-border: rgba(148, 163, 184, 0.3);
   --board-cell-bg: rgba(255, 255, 255, 0.02);
   --board-cell-border: rgba(148, 163, 184, 0.18);
   --board-separator: rgba(71, 85, 105, 0.95);
-  --board-hover-bg: rgba(255, 255, 255, 0.04);
+  --board-hover-bg: rgba(176, 65, 65, 0.215);
   --board-selected-bg: rgba(0, 0, 0, 0.26);
   --board-selected-text: #f8fafc;
+  /* test */
+  --board-selected-text: #fbbf24;
+
   --board-fixed-text: #f8fafc;
   --board-filled-text: #fbbf24;
-  --board-completed-bg: rgba(34, 197, 94, 0.12);
-  --board-completed-text: #bbf7d0;
+  --board-completed-bg: rgba(255, 255, 255, 0.02);
+  --board-completed-text: #14853a;
   --board-empty-text: #cbd5e1;
   --board-wrong-bg: rgba(244, 63, 94, 0.26);
   --board-wrong-text: #ffe4e6;
-  --board-note-text: #94a3b8;
+  --board-note-text: #b89494;
+
+  /* other colors */
+  --border: #f5edee;
+  --text-emergency: #c30c0cc4;
+  --text-neutral: #94a3b8;
+  --theme-bg: rgba(211, 203, 203, 0.874);
+
   font-synthesis-weight: none;
   text-rendering: optimizeLegibility;
 }
@@ -52,22 +62,32 @@ html[data-theme="light"] {
     ),
     linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
   --app-text: #0f172a;
-  --board-surface: rgba(248, 250, 252, 0.84);
+  --board-surface: rgba(232, 240, 249, 0.84);
   --board-border: rgba(71, 85, 105, 0.22);
   --board-cell-bg: rgba(255, 255, 255, 0.88);
   --board-cell-border: rgba(100, 116, 139, 0.18);
   --board-separator: rgba(51, 65, 85, 0.9);
   --board-hover-bg: rgba(56, 189, 248, 0.08);
-  --board-selected-bg: rgba(56, 189, 248, 0.2);
+  --board-selected-bg: rgba(8, 43, 56, 0.2);
   --board-selected-text: #0f172a;
   --board-fixed-text: #0f172a;
   --board-filled-text: #1d4ed8;
   --board-completed-bg: rgba(154, 163, 166, 0.2);
-  --board-completed-text: #0f172a;
+  /* --board-completed-text: #0f172a; */
+  /* test */
+  --board-completed-bg: rgba(255, 255, 255, 0.88);
+  --board-completed-text: #3dd023a6;
+  /* end test */
   --board-empty-text: #64748b;
   --board-wrong-bg: rgba(244, 63, 94, 0.18);
   --board-wrong-text: #991b1b;
   --board-note-text: #19437a;
+
+  /* other colors */
+  --border: #754f4f;
+  --text-emergency: #c30c0cc4;
+  --text-neutral: #a5b6ce;
+  --theme-bg: rgba(97, 76, 76, 0.586);
 }
 
 html[data-theme="light"] .text-white,
