@@ -29,7 +29,7 @@
   --board-filled-text: #fbbf24;
   --board-completed-bg: rgba(34, 197, 94, 0.12);
   --board-completed-text: #bbf7d0;
-  --board-empty-text: #94a3b8;
+  --board-empty-text: #cbd5e1;
   --board-wrong-bg: rgba(244, 63, 94, 0.26);
   --board-wrong-text: #ffe4e6;
   --board-note-text: #94a3b8;
@@ -62,12 +62,12 @@ html[data-theme="light"] {
   --board-selected-text: #0f172a;
   --board-fixed-text: #0f172a;
   --board-filled-text: #1d4ed8;
-  --board-completed-bg: rgba(59, 130, 246, 0.14);
-  --board-completed-text: #1d4ed8;
+  --board-completed-bg: rgba(154, 163, 166, 0.2);
+  --board-completed-text: #0f172a;
   --board-empty-text: #64748b;
   --board-wrong-bg: rgba(244, 63, 94, 0.18);
   --board-wrong-text: #991b1b;
-  --board-note-text: #64748b;
+  --board-note-text: #19437a;
 }
 
 html[data-theme="light"] .text-white,

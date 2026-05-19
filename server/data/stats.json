@@ -14,8 +14,8 @@
     "fastestSolveMs": null,
     "bestWinStreak": 0,
     "currentWinStreak": 0,
-    "lastSeenAt": 1779143298338,
-    "updatedAt": 1779143298338
+    "lastSeenAt": 1779162490280,
+    "updatedAt": 1779162490280
   },
   "device-vifa0uwm": {
     "deviceId": "device-vifa0uwm",
@@ -52,5 +52,41 @@
     "currentWinStreak": 0,
     "lastSeenAt": 1779139223359,
     "updatedAt": 1779139223359
+  },
+  "8168f30d-52e7-423e-9e66-8e541cdecc85": {
+    "deviceId": "8168f30d-52e7-423e-9e66-8e541cdecc85",
+    "displayName": "Jesse",
+    "gamesPlayed": 2,
+    "roomsCreated": 5,
+    "roomsJoined": 9,
+    "wins": 0,
+    "losses": 2,
+    "mistakes": 2,
+    "correctPlacements": 1,
+    "wrongPlacements": 2,
+    "totalScore": 0,
+    "fastestSolveMs": null,
+    "bestWinStreak": 0,
+    "currentWinStreak": 0,
+    "lastSeenAt": 1779161496815,
+    "updatedAt": 1779161496815
+  },
+  "30cb55a2-b59e-4733-a188-0738b767a92d": {
+    "deviceId": "30cb55a2-b59e-4733-a188-0738b767a92d",
+    "displayName": "Hrido\\y",
+    "gamesPlayed": 3,
+    "roomsCreated": 10,
+    "roomsJoined": 24,
+    "wins": 0,
+    "losses": 3,
+    "mistakes": 1,
+    "correctPlacements": 6,
+    "wrongPlacements": 1,
+    "totalScore": 55,
+    "fastestSolveMs": null,
+    "bestWinStreak": 0,
+    "currentWinStreak": 0,
+    "lastSeenAt": 1779163167635,
+    "updatedAt": 1779163167635
   }
 }

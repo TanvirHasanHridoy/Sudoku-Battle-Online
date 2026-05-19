@@ -344,6 +344,9 @@ export default function App() {
   const voiceRecorderRef = useRef<MediaRecorder | null>(null);
   const voiceRecorderFlushTimerRef = useRef<number | null>(null);
   const voicePeersRef = useRef<Record<string, VoicePeerState>>({});
+  const voiceChunkBuffersRef = useRef<
+    Record<string, { chunks: ArrayBuffer[]; size: number }>
+  >({});
   const voiceTargetIdsRef = useRef<string[]>([]);
 
   useEffect(() => {
@@ -669,7 +672,11 @@ export default function App() {
               player.outcome === "won"
                 ? `${player.displayName} solved the board first.`
                 : `${player.displayName} got eliminated.`;
-            pushToast(message, player.outcome === "won" ? "success" : "danger");
+            pushToast(
+              message,
+              player.outcome === "won" ? "success" : "danger",
+              true,
+            );
           }
 
           if (
@@ -721,7 +728,11 @@ export default function App() {
             prevPlayer.connected &&
             !nextPlayer?.connected
           ) {
-            pushToast(`${prevPlayer.displayName} exited the room.`, "neutral");
+            pushToast(
+              `${prevPlayer.displayName} exited the room.`,
+              "neutral",
+              true,
+            );
           }
         }
       }
@@ -1441,6 +1452,46 @@ export default function App() {
     });
   }
 
+  // Buffer multiple small chunks per sender and play a concatenated blob
+  // when individual chunk playback/decoding fails.
+  function pushBufferedChunk(fromDeviceId: string, chunk: ArrayBuffer) {
+    const map = voiceChunkBuffersRef.current;
+    const entry = map[fromDeviceId] ?? { chunks: [], size: 0 };
+    entry.chunks.push(chunk);
+    entry.size += chunk.byteLength;
+    // keep buffer bounded (e.g., ~200KB) and at most 16 chunks
+    while (entry.size > 200 * 1024 || entry.chunks.length > 16) {
+      const removed = entry.chunks.shift();
+      if (removed) entry.size -= removed.byteLength;
+    }
+    map[fromDeviceId] = entry;
+  }
+
+  function playBufferedConcat(fromDeviceId: string, mimeType: string) {
+    const map = voiceChunkBuffersRef.current;
+    const entry = map[fromDeviceId];
+    if (!entry || entry.chunks.length === 0) return false;
+
+    try {
+      const blob = new Blob(entry.chunks, { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => URL.revokeObjectURL(url);
+      void audio.play().catch(() => {
+        URL.revokeObjectURL(url);
+      });
+      // clear buffer after playing concatenated blob
+      delete map[fromDeviceId];
+      appendVoiceDebugEvent(
+        `played concatenated ${entry.size} bytes from ${fromDeviceId.slice(0, 6).toUpperCase()}`,
+      );
+      return true;
+    } catch (err) {
+      console.warn("Failed concatenated playback:", err);
+      return false;
+    }
+  }
+
   async function handleVoiceSignal(payload: VoiceSignalPayload) {
     const currentRoom = roomRef.current;
 
@@ -1534,10 +1585,29 @@ export default function App() {
       `rx ${payload.chunk.byteLength} bytes (${payload.mimeType || "audio/webm"}) from ${payload.fromDeviceId.slice(0, 6).toUpperCase()}`,
     );
 
-    // Try simple Audio element playback first, then fall back to Web Audio decode and play
+    // Buffer very small chunks to avoid attempting per-chunk playback of incomplete
+    // webm fragments which browsers will reject. Only attempt per-chunk playback
+    // when the chunk is large enough; otherwise accumulate and play a concatenated blob.
+    const mimeType = payload.mimeType || "audio/webm;codecs=opus";
+    const THRESHOLD_BYTES = 1500;
+    const currentBuf = voiceChunkBuffersRef.current[payload.fromDeviceId];
+    const currentBuffered = currentBuf ? currentBuf.size : 0;
+
+    if (payload.chunk.byteLength < THRESHOLD_BYTES) {
+      pushBufferedChunk(payload.fromDeviceId, payload.chunk);
+      if (currentBuffered + payload.chunk.byteLength >= THRESHOLD_BYTES) {
+        // enough accumulated data — try playing the concatenated buffer
+        playBufferedConcat(payload.fromDeviceId, mimeType);
+      }
+      return;
+    }
+
+    // keep a recent buffer as a fallback
+    pushBufferedChunk(payload.fromDeviceId, payload.chunk);
+
     try {
       const blob = new Blob([payload.chunk], {
-        type: payload.mimeType || "audio/webm",
+        type: mimeType,
       });
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
@@ -1556,7 +1626,12 @@ export default function App() {
           "audio.play() failed, trying AudioContext decode",
         );
         URL.revokeObjectURL(url);
-        // fallback below
+        // Try concatenated-buffer playback first (faster recovery)
+        if (playBufferedConcat(payload.fromDeviceId, mimeType)) {
+          return;
+        }
+
+        // fallback: try decode on AudioContext
         try {
           const ac =
             audioContextRef.current ??
@@ -1580,6 +1655,9 @@ export default function App() {
                 lastError: `Decode failed: ${String(err2)}`,
               }));
               appendVoiceDebugEvent("AudioContext decode failed");
+              // push to buffer and try concatenated playback
+              pushBufferedChunk(payload.fromDeviceId, payload.chunk);
+              playBufferedConcat(payload.fromDeviceId, mimeType);
             },
           );
         } catch (err3) {
@@ -1589,6 +1667,8 @@ export default function App() {
             lastError: `Playback failed: ${String(err3)}`,
           }));
           appendVoiceDebugEvent("AudioContext fallback threw an exception");
+          pushBufferedChunk(payload.fromDeviceId, payload.chunk);
+          playBufferedConcat(payload.fromDeviceId, mimeType);
         }
       });
       return;
@@ -1599,6 +1679,9 @@ export default function App() {
         lastError: `Initial playback threw: ${String(err)}`,
       }));
       appendVoiceDebugEvent("Initial blob playback threw an exception");
+      // buffer and try concatenated play
+      pushBufferedChunk(payload.fromDeviceId, payload.chunk);
+      playBufferedConcat(payload.fromDeviceId, mimeType);
     }
 
     // As a final fallback, attempt to decode via AudioContext directly
@@ -1623,6 +1706,8 @@ export default function App() {
             lastError: `Final decode failed: ${String(err)}`,
           }));
           appendVoiceDebugEvent("Final AudioContext decode failed");
+          pushBufferedChunk(payload.fromDeviceId, payload.chunk);
+          playBufferedConcat(payload.fromDeviceId, mimeType);
         },
       );
     } catch (err) {
@@ -2367,6 +2452,13 @@ export default function App() {
               ? "You are out. You can spectate or exit."
               : "Board locked"
     : "No room loaded";
+
+  // derive the resolved theme locally so UI elements can adapt (light/dark)
+  const resolvedTheme =
+    themeMode === "system" ? (systemPrefersDark ? "dark" : "light") : themeMode;
+
+  const qrBgColor = resolvedTheme === "light" ? "#ffffff" : "#06111f";
+  const qrFgColor = resolvedTheme === "light" ? "#020617" : "#e2e8f0";
 
   return (
     <div className="relative min-h-screen overflow-hidden px-2 py-3 text-slate-100 sm:px-6 sm:py-6 lg:px-8">
@@ -3192,8 +3284,8 @@ export default function App() {
                       <QRCodeSVG
                         value={inviteUrl}
                         size={164}
-                        bgColor="#ffffff"
-                        fgColor="#020617"
+                        bgColor={qrBgColor}
+                        fgColor={qrFgColor}
                         level="M"
                         includeMargin={false}
                       />
