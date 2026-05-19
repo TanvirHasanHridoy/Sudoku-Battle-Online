@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import { flushSync } from "react-dom";
 import { useEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { Board } from "@/components/Board";
@@ -186,6 +187,16 @@ function mergeRoomState(nextRoom: RoomState | null) {
   return nextRoom;
 }
 
+function patchRoomBoard(room: RoomState, index: number, value: CellValue) {
+  const nextBoard = [...room.board];
+  nextBoard[index] = value;
+
+  return {
+    ...room,
+    board: nextBoard,
+  };
+}
+
 function getDifficultyHint(difficulty: Difficulty) {
   if (difficulty === "random") {
     return "Server picks a fresh difficulty when the room is created.";
@@ -339,6 +350,7 @@ export default function App() {
   const socketRef = useRef<GameSocket | null>(null);
   const initialRoomAction = useRef<"join" | "reconnect" | null>(null);
   const autoJoinAttempted = useRef(false);
+  const isLeavingRoomRef = useRef(false);
   const roomRef = useRef<RoomState | null>(null);
   const voiceLocalStreamRef = useRef<MediaStream | null>(null);
   const voiceRecorderRef = useRef<MediaRecorder | null>(null);
@@ -560,13 +572,13 @@ export default function App() {
     }
 
     if (outcome === "won") {
-      pushToast("You won this round.", "success");
+      pushToast("You won this round.", "success", true);
       playSound("win");
     } else if (outcome === "lost") {
       pushToast("You lost this round.", "danger", true);
       playSound("loss");
     } else {
-      pushToast("Round finished.", "neutral");
+      pushToast("Round finished.", "neutral", true);
     }
   }, [deviceId, room]);
 
@@ -829,6 +841,26 @@ export default function App() {
       setSelectedIndex(firstEditableCell(room));
     }
   }, [deviceId, room, selectedIndex]);
+
+  useEffect(() => {
+    const spectatingTargetId =
+      room?.players[deviceId]?.spectatingDeviceId ?? null;
+
+    if (!room || !spectatingTargetId) {
+      return;
+    }
+
+    const targetPlayer = room.players[spectatingTargetId];
+
+    if (targetPlayer?.connected) {
+      return;
+    }
+
+    setStatusMessage(
+      "The board you were spectating ended. Returning to lobby.",
+    );
+    void leaveRoom();
+  }, [deviceId, room]);
 
   useEffect(() => {
     if (!room) {
@@ -1953,6 +1985,11 @@ export default function App() {
     const row = Math.floor(targetIndex / 9);
     const col = targetIndex % 9;
     const previousBoardValue = room.board[targetIndex];
+    const previousRoom = room;
+
+    flushSync(() => {
+      setRoom(patchRoomBoard(previousRoom, targetIndex, value));
+    });
 
     const clearWrongMoveTimer = () => {
       if (wrongMoveTimerRef.current !== null) {
@@ -2126,6 +2163,9 @@ export default function App() {
       setStatusMessage(
         error instanceof Error ? error.message : "Unable to update the board.",
       );
+      flushSync(() => {
+        setRoom(previousRoom);
+      });
     }
   }
 
@@ -2188,37 +2228,62 @@ export default function App() {
   }
 
   async function leaveRoom() {
-    if (!room) {
+    console.log(
+      "room:",
+      room,
+      "isLeavingRoomRef.current:",
+      isLeavingRoomRef.current,
+    );
+    if (!room || isLeavingRoomRef.current) {
       return;
     }
 
-    await stopVoiceChat();
+    // Make local UI leave immediate and idempotent so the first click
+    // always clears the room state and can't be consumed by modal/overlay
+    // changes. We capture the roomCode before clearing the UI.
+    isLeavingRoomRef.current = true;
+    const roomCode = room.roomCode;
 
-    socketRef.current?.emit("game:leave", {
-      roomCode: room.roomCode,
-      deviceId,
-    });
-
-    setRoom(null);
-    setSelectedIndex(null);
-    setWrongMove(null);
-    setFinishModal({
-      visible: false,
-      outcome: null,
-      score: 0,
-      spectateTargetId: null,
-    });
-    setRematchModal({ visible: false });
-    setGameMenuOpen(false);
+    // Clear local UI synchronously so the app responds immediately.
     if (wrongMoveTimerRef.current !== null) {
       window.clearTimeout(wrongMoveTimerRef.current);
       wrongMoveTimerRef.current = null;
     }
+
+    flushSync(() => {
+      setRoom(null);
+      setSelectedIndex(null);
+      setWrongMove(null);
+      setFinishModal({
+        visible: false,
+        outcome: null,
+        score: 0,
+        spectateTargetId: null,
+      });
+      setRematchModal({ visible: false });
+      setGameMenuOpen(false);
+    });
+
     clearActiveRoomCode();
     setStatusMessage(
       "Left the room. You can create a new one or join another game.",
     );
-    await syncStats();
+
+    // Emit leave and stop voice chat in background; don't wait for these
+    // to finish to keep UI responsive. We still sync stats but it runs
+    // asynchronously and won't affect the immediate UI.
+    try {
+      socketRef.current?.emit("game:leave", {
+        roomCode,
+        deviceId,
+      });
+
+      void stopVoiceChat().catch(() => undefined);
+
+      await syncStats();
+    } finally {
+      isLeavingRoomRef.current = false;
+    }
   }
 
   async function spectateOpponent() {
@@ -2376,8 +2441,14 @@ export default function App() {
     room && currentPlayer?.spectatingDeviceId
       ? (room.players[currentPlayer.spectatingDeviceId] ?? null)
       : null;
+  const isActivePlayer = currentPlayer?.outcome === "active";
+  const activePlayers = room
+    ? Object.values(room.players).filter(
+        (player) => player.connected && player.outcome === "active",
+      )
+    : [];
   const watchersWatchingMe =
-    room && currentPlayer?.outcome === "active"
+    room && isActivePlayer
       ? Object.values(room.players).filter(
           (player) =>
             player.deviceId !== deviceId &&
@@ -2385,11 +2456,8 @@ export default function App() {
             player.connected,
         )
       : [];
-  const opponent = room
-    ? (Object.values(room.players).find(
-        (p) => p.deviceId !== deviceId && p.outcome === "active" && p.connected,
-      ) ?? null)
-    : null;
+  const opponent =
+    activePlayers.find((player) => player.deviceId !== deviceId) ?? null;
   const canInteract =
     room?.phase === "active" && currentPlayer?.outcome === "active";
   const canRequestRematch =
@@ -2411,7 +2479,7 @@ export default function App() {
   const mistakesLeft = currentPlayer
     ? Math.max(0, 3 - currentPlayer.mistakes)
     : 3;
-  const currentScore = currentPlayer?.score ?? 0;
+  const currentScore = isActivePlayer ? (currentPlayer?.score ?? 0) : null;
   const finishedDigits = room
     ? getFinishedDigits(room.board)
     : new Set<number>();
@@ -2586,7 +2654,7 @@ export default function App() {
       </div>
 
       <div className="relative mx-auto flex w-full max-w-7xl flex-col gap-6">
-        <header className="flex flex-col gap-4 rounded-[2rem] border border-white/10 bg-white/5 px-5 py-4 shadow-2xl shadow-slate-950/30 backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between">
+        <header className="relative z-50 flex flex-col gap-4 rounded-[2rem] border border-white/10 bg-white/5 px-5 py-4 shadow-2xl shadow-slate-950/30 backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="font-display text-xs uppercase tracking-[0.4em] text-sky-200/80">
               Sudoku Remote
@@ -2615,17 +2683,17 @@ export default function App() {
               </select>
             </div>
           </div>
+        </header>
 
-          <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-[0.28em] text-slate-300">
-            <span className="rounded-full border border-white/10 bg-slate-950/50 px-3 py-1.5">
+        <main className="relative grid gap-6 lg:grid-cols-[1.3fr_0.7fr] lg:items-start">
+          <div className="pointer-events-none absolute right-4 top-4 z-30 flex justify-end">
+            <span className="rounded-full border border-white/10 bg-slate-950/70 px-3 py-1.5 text-xs uppercase tracking-[0.28em] text-slate-200 backdrop-blur-xl">
               {room?.roomCode ?? "Lobby"}
             </span>
           </div>
-        </header>
 
-        <main className="grid gap-6 lg:grid-cols-[1.3fr_0.7fr]">
           <section
-            className={`rounded-[2rem] border border-white/10 bg-gradient-to-br ${statusTone} p-2 shadow-2xl shadow-slate-950/30 backdrop-blur-xl sm:p-6`}
+            className={`self-start rounded-[2rem] border border-white/10 bg-gradient-to-br ${statusTone} p-2 shadow-2xl shadow-slate-950/30 backdrop-blur-xl sm:p-6`}
           >
             {!room ? (
               <motion.div
@@ -2912,25 +2980,23 @@ export default function App() {
                     </div>
                     {/* Scoreboard (only show connected players) */}
                     <div className="flex flex-wrap justify-center gap-2">
-                      {Object.values(room.players)
-                        .filter((p) => p.connected)
-                        .map((player) => (
-                          <div
-                            key={player.deviceId}
-                            className={`rounded-2xl border px-3 py-2 ${
-                              player.deviceId === deviceId
-                                ? "border-sky-400 bg-sky-400/15"
-                                : "border-white/10 bg-slate-950/50"
-                            }`}
-                          >
-                            <p className="text-[0.65rem] uppercase tracking-[0.3em] text-slate-500 truncate max-w-[8rem]">
-                              {player.displayName}
-                            </p>
-                            <p className="text-base font-semibold text-white">
-                              {player.score}
-                            </p>
-                          </div>
-                        ))}
+                      {activePlayers.map((player) => (
+                        <div
+                          key={player.deviceId}
+                          className={`rounded-2xl border px-3 py-2 ${
+                            player.deviceId === deviceId
+                              ? "border-sky-400 bg-sky-400/15"
+                              : "border-white/10 bg-slate-950/50"
+                          }`}
+                        >
+                          <p className="text-[0.65rem] uppercase tracking-[0.3em] text-slate-500 truncate max-w-[8rem]">
+                            {player.displayName}
+                          </p>
+                          <p className="text-base font-semibold text-white">
+                            {player.score}
+                          </p>
+                        </div>
+                      ))}
                     </div>
                   </div>
 
@@ -2948,50 +3014,57 @@ export default function App() {
                     </button>
                   ) : null}
 
-                  <div className="mb-3 flex flex-wrap items-center gap-2">
-                    <span className="inline-flex h-10 min-w-[8.5rem] items-center justify-center rounded-full border border-white/10 bg-white/5 px-3 text-xs uppercase tracking-[0.28em] text-slate-200 tabular-nums whitespace-nowrap">
-                      Timer{" "}
-                      <span className="ml-1 font-mono">
-                        {formatTime(roomTimer)}
-                      </span>
-                    </span>
-                    <span className="inline-flex h-10 min-w-[8.5rem] items-center justify-center rounded-full border border-sky-400/30 bg-sky-400/10 px-3 text-xs uppercase tracking-[0.28em] text-sky-100 tabular-nums whitespace-nowrap">
-                      You <span className="ml-1 font-mono">{currentScore}</span>{" "}
-                      pts /{" "}
-                      <span className="ml-1 font-mono">{mistakesLeft}</span>{" "}
-                      lives
-                    </span>
-                    {opponent ? (
-                      <span className="inline-flex h-10 min-w-[10.5rem] max-w-full items-center justify-center rounded-full border border-white/10 bg-slate-950/50 px-3 text-xs uppercase tracking-[0.28em] text-slate-200 tabular-nums whitespace-nowrap overflow-hidden">
-                        <span className="truncate">{opponent.displayName}</span>
+                  <div className="mb-3 min-h-[5.75rem]">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex h-10 min-w-[8.5rem] items-center justify-center rounded-full border border-white/10 bg-white/5 px-3 text-xs uppercase tracking-[0.28em] text-slate-200 tabular-nums whitespace-nowrap">
+                        Timer{" "}
                         <span className="ml-1 font-mono">
-                          {opponent.score ?? 0}
-                        </span>{" "}
-                        pts /{" "}
-                        <span className="ml-1 font-mono">
-                          {Math.max(0, 3 - (opponent.mistakes ?? 0))}
-                        </span>{" "}
-                        lives
-                      </span>
-                    ) : null}
-                    {watchersWatchingMe.length > 0 ? (
-                      <span className="inline-flex h-10 min-w-[9rem] max-w-full items-center justify-center gap-1 rounded-full border border-cyan-300/30 bg-cyan-300/10 px-3 text-xs uppercase tracking-[0.28em] text-cyan-50 whitespace-nowrap overflow-hidden">
-                        <EyeIcon />
-                        <span className="truncate">
-                          {watchersWatchingMe.length === 1
-                            ? `${watchersWatchingMe[0]?.displayName} spectating`
-                            : `${watchersWatchingMe.length} spectators`}
+                          {formatTime(roomTimer)}
                         </span>
                       </span>
-                    ) : null}
-                    {currentPlayer?.spectatingDeviceId && spectatedPlayer ? (
-                      <span className="inline-flex h-10 min-w-[9rem] max-w-full items-center justify-center gap-1 rounded-full border border-cyan-300/30 bg-cyan-300/10 px-3 text-xs uppercase tracking-[0.28em] text-cyan-50 whitespace-nowrap overflow-hidden">
-                        <EyeIcon />
-                        <span className="truncate">
-                          Watching {spectatedPlayer.displayName}
+                      {isActivePlayer ? (
+                        <span className="inline-flex h-10 min-w-[8.5rem] items-center justify-center rounded-full border border-sky-400/30 bg-sky-400/10 px-3 text-xs uppercase tracking-[0.28em] text-sky-100 tabular-nums whitespace-nowrap">
+                          You{" "}
+                          <span className="ml-1 font-mono">{currentScore}</span>{" "}
+                          pts /{" "}
+                          <span className="ml-1 font-mono">{mistakesLeft}</span>{" "}
+                          lives
                         </span>
-                      </span>
-                    ) : null}
+                      ) : null}
+                      {opponent ? (
+                        <span className="inline-flex h-10 min-w-[10.5rem] max-w-full items-center justify-center rounded-full border border-white/10 bg-slate-950/50 px-3 text-xs uppercase tracking-[0.28em] text-slate-200 tabular-nums whitespace-nowrap overflow-hidden">
+                          <span className="truncate">
+                            {opponent.displayName}
+                          </span>
+                          <span className="ml-1 font-mono">
+                            {opponent.score ?? 0}
+                          </span>{" "}
+                          pts /{" "}
+                          <span className="ml-1 font-mono">
+                            {Math.max(0, 3 - (opponent.mistakes ?? 0))}
+                          </span>{" "}
+                          lives
+                        </span>
+                      ) : null}
+                      {watchersWatchingMe.length > 0 ? (
+                        <span className="inline-flex h-10 min-w-[9rem] max-w-full items-center justify-center gap-1 rounded-full border border-cyan-300/30 bg-cyan-300/10 px-3 text-xs uppercase tracking-[0.28em] text-cyan-50 whitespace-nowrap overflow-hidden">
+                          <EyeIcon />
+                          <span className="truncate">
+                            {watchersWatchingMe.length === 1
+                              ? `${watchersWatchingMe[0]?.displayName} spectating`
+                              : `${watchersWatchingMe.length} spectators`}
+                          </span>
+                        </span>
+                      ) : null}
+                      {currentPlayer?.spectatingDeviceId && spectatedPlayer ? (
+                        <span className="inline-flex h-10 min-w-[9rem] max-w-full items-center justify-center gap-1 rounded-full border border-cyan-300/30 bg-cyan-300/10 px-3 text-xs uppercase tracking-[0.28em] text-cyan-50 whitespace-nowrap overflow-hidden">
+                          <EyeIcon />
+                          <span className="truncate">
+                            Watching {spectatedPlayer.displayName}
+                          </span>
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
 
                   <div
@@ -3237,14 +3310,18 @@ export default function App() {
                           </div>
                           <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-200">
                             <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
-                              Mistakes: {player.mistakes} / 3
-                            </span>
-                            <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
                               {player.connected ? "Connected" : "Disconnected"}
                             </span>
-                            <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
-                              Score: {player.score ?? 0}
-                            </span>
+                            {player.outcome === "active" ? (
+                              <>
+                                <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
+                                  Mistakes: {player.mistakes} / 3
+                                </span>
+                                <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
+                                  Score: {player.score ?? 0}
+                                </span>
+                              </>
+                            ) : null}
                           </div>
                         </div>
                       ))}
@@ -3261,7 +3338,7 @@ export default function App() {
             )}
           </section>
 
-          <aside className="space-y-6">
+          <aside className="self-start space-y-6">
             {room ? (
               <div className="rounded-[2rem] border border-cyan-400/20 bg-gradient-to-br from-cyan-400/15 to-sky-400/5 p-5 shadow-2xl shadow-slate-950/30 backdrop-blur-xl">
                 <div className="flex items-start justify-between gap-3">
