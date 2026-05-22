@@ -902,7 +902,10 @@ export default function App() {
             return;
           }
 
-          if (voiceLocalStreamRef.current) {
+          // Avoid offer glare: only one side in each pair should initiate the
+          // WebRTC offer. The lexicographically smaller device ID becomes the
+          // caller, and the other side waits to answer.
+          if (voiceLocalStreamRef.current && deviceId < targetId) {
             void createVoiceOffer(targetId);
           }
         })
@@ -1601,6 +1604,16 @@ export default function App() {
     }
 
     if (payload.fromDeviceId === deviceId) {
+      return;
+    }
+
+    const peerState = voicePeersRef.current[payload.fromDeviceId];
+
+    // If the WebRTC audio track is already live for this sender, prefer that
+    // stream and skip the socket-based chunk playback fallback. The fallback is
+    // only for older/unsupported paths and can throw when the blob MIME type is
+    // not directly playable by the browser.
+    if (peerState?.remoteStream || voiceStreams[payload.fromDeviceId]) {
       return;
     }
 
